@@ -1,0 +1,28 @@
+services:
+  jellyfin:
+    image: jellyfin/jellyfin:latest
+    container_name: jellyfin
+    restart: unless-stopped
+    volumes:
+      - /opt/streaming/jellyfin/config:/config
+      - /opt/streaming/jellyfin/cache:/cache
+      - type: bind
+        source: /mnt/gdrive
+        target: /media
+        read_only: true
+        bind:
+          propagation: rslave
+
+  caddy:
+    image: caddy:2-alpine
+    container_name: caddy
+    restart: unless-stopped
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - /opt/streaming/Caddyfile:/etc/caddy/Caddyfile:ro
+      - /opt/streaming/caddy/data:/data
+      - /opt/streaming/caddy/config:/config
+    depends_on:
+      - jellyfin
