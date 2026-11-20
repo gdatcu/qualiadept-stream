@@ -67,6 +67,25 @@ function loadSavedBrightness(): number {
   }
 }
 
+function getInitialQuality(): QualityPreset {
+  try {
+    const nav = navigator as Navigator & {
+      connection?: { type?: string; effectiveType?: string; saveData?: boolean };
+    };
+    const conn = nav.connection;
+    if (!conn) return 'auto';
+    if (conn.saveData || conn.effectiveType === '2g' || conn.effectiveType === '3g') {
+      return '480p';
+    }
+    if (conn.type === 'cellular') {
+      return '720p';
+    }
+  } catch {
+    // Fallback to Original
+  }
+  return 'auto';
+}
+
 function formatTime(sec: number): string {
   if (!Number.isFinite(sec) || sec < 0) return '0:00';
   const h = Math.floor(sec / 3600);
@@ -90,7 +109,7 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
   const swipeStartRef = useRef<{ y: number; startBrightness: number; moved: boolean } | null>(null);
   const brightnessHudTimerRef = useRef<number | null>(null);
 
-  const [quality, setQuality] = useState<QualityPreset>('auto');
+  const [quality, setQuality] = useState<QualityPreset>(() => getInitialQuality());
   const [playback, setPlayback] = useState<PlaybackInfo | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
