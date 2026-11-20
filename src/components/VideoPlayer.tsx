@@ -358,6 +358,7 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
         }}
         crossOrigin="anonymous"
         playsInline
+        {...({ 'x-webkit-airplay': 'allow' } as Record<string, string>)}
         className="h-full w-full object-contain"
       >
         {playback?.subtitles.map((sub) => (

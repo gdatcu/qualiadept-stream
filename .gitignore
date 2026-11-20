@@ -3,6 +3,7 @@ node_modules/
 
 # Build output
 dist/
+tizen-dist/
 
 # Generated native projects (built automatically in GitHub Actions)
 android/
