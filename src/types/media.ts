@@ -1,5 +1,22 @@
 export type MediaType = 'Movie' | 'Series' | 'Episode';
 
+export type QualityPreset = 'auto' | '1080p' | '720p' | '480p';
+
+export interface QualityOption {
+  id: QualityPreset;
+  label: string;
+  description: string;
+  maxWidth?: number;
+  videoBitrate?: number;
+}
+
+export const QUALITY_OPTIONS: QualityOption[] = [
+  { id: 'auto', label: 'Original', description: 'Best available (Direct Play / 12 Mbps)' },
+  { id: '1080p', label: '1080p HD', description: '8 Mbps · Smooth Full HD', maxWidth: 1920, videoBitrate: 8_000_000 },
+  { id: '720p', label: '720p HD', description: '4 Mbps · Great for mobile / Wi-Fi', maxWidth: 1280, videoBitrate: 4_000_000 },
+  { id: '480p', label: '480p SD', description: '1.5 Mbps · Low data / weak 4G', maxWidth: 854, videoBitrate: 1_500_000 },
+];
+
 export interface SubtitleTrack {
   index: number;
   label: string;

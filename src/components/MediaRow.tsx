@@ -61,8 +61,16 @@ export const MediaRow: React.FC<MediaRowProps> = ({
         {items.map((item) => (
           <div
             key={item.id}
+            role="button"
+            tabIndex={0}
             onClick={() => onSelect(item)}
-            className={`group/card relative flex-shrink-0 cursor-pointer overflow-hidden rounded-xl border border-white/10 bg-surface transition-all duration-300 hover:scale-[1.04] hover:border-violet-400/50 hover:shadow-xl hover:shadow-violet-900/20 ${
+            onKeyDown={(e) => {
+              if (e.key === 'Enter' || e.key === ' ') {
+                e.preventDefault();
+                onSelect(item);
+              }
+            }}
+            className={`group/card relative flex-shrink-0 cursor-pointer overflow-hidden rounded-xl border border-white/10 bg-surface transition-all duration-300 hover:scale-[1.04] hover:border-violet-400/50 hover:shadow-xl hover:shadow-violet-900/20 focus:outline-none focus:scale-[1.05] focus:ring-4 focus:ring-violet-400 focus:border-violet-400 ${
               showProgress ? 'w-64 sm:w-72' : 'w-40 sm:w-48'
             }`}
           >

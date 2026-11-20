@@ -13,6 +13,7 @@ import {
   toggleFavorite,
 } from './services/jellyfin';
 import type { AuthSession, MediaItem } from './types/media';
+import { initTvNavigation } from './utils/tvNavigation';
 
 export const App: React.FC = () => {
   const [session, setSession] = useState<AuthSession | null>(() => loadSavedSession());
@@ -41,6 +42,10 @@ export const App: React.FC = () => {
     } finally {
       setLoading(false);
     }
+  }, []);
+
+  useEffect(() => {
+    return initTvNavigation();
   }, []);
 
   useEffect(() => {
@@ -265,6 +270,7 @@ export const App: React.FC = () => {
         <VideoPlayer
           session={session}
           item={playingItem}
+          onPlayNext={(nextEp) => setPlayingItem(nextEp)}
           onClose={() => {
             setPlayingItem(null);
             if (session && !session.isDemo) {

@@ -1,11 +1,13 @@
 import { DEMO_EPISODES, DEMO_ITEMS, DEMO_SEASONS } from '../data/demoCatalog';
-import type {
-  AuthSession,
-  MediaItem,
-  MediaType,
-  PlaybackInfo,
-  SeasonItem,
-  SubtitleTrack,
+import {
+  QUALITY_OPTIONS,
+  type AuthSession,
+  type MediaItem,
+  type MediaType,
+  type PlaybackInfo,
+  type QualityPreset,
+  type SeasonItem,
+  type SubtitleTrack,
 } from '../types/media';
 
 const SESSION_STORAGE_KEY = 'qualiadept_stream_session_v1';
@@ -308,9 +310,51 @@ export async function toggleFavorite(
   return !currentlyFavorite;
 }
 
+export async function fetchNextEpisode(
+  session: AuthSession,
+  currentItem: MediaItem
+): Promise<MediaItem | null> {
+  if (currentItem.type !== 'Episode' || !currentItem.seriesId) return null;
+
+  if (session.isDemo) {
+    const allDemoEps = Object.values(DEMO_EPISODES).flat();
+    const idx = allDemoEps.findIndex((e) => e.id === currentItem.id);
+    if (idx >= 0 && idx + 1 < allDemoEps.length) {
+      return allDemoEps[idx + 1];
+    }
+    return null;
+  }
+
+  try {
+    const params = new URLSearchParams({
+      userId: session.userId,
+      Fields: 'Overview,RunTimeTicks,UserData',
+    });
+    const res = await fetch(
+      `${session.serverUrl}/Shows/${currentItem.seriesId}/Episodes?${params.toString()}`,
+      {
+        headers: { Authorization: buildAuthHeader(session.accessToken) },
+      }
+    );
+    if (!res.ok) return null;
+    const data = await res.json();
+    const episodes = (data.Items as RawJellyfinItem[]).map((raw) =>
+      mapJellyfinItem(raw, session)
+    );
+    const idx = episodes.findIndex((e) => e.id === currentItem.id);
+    if (idx >= 0 && idx + 1 < episodes.length) {
+      return episodes[idx + 1];
+    }
+    return null;
+  } catch {
+    return null;
+  }
+}
+
 export async function getPlaybackInfo(
   session: AuthSession,
-  item: MediaItem
+  item: MediaItem,
+  quality: QualityPreset = 'auto'
 ): Promise<PlaybackInfo> {
   if (session.isDemo) {
     const url = item.demoStreamUrl || 'https://test-streams.mux.dev/x36xhzz/x36xhzz.m3u8';
@@ -323,6 +367,10 @@ export async function getPlaybackInfo(
     };
   }
 
+  const preset = QUALITY_OPTIONS.find((q) => q.id === quality) || QUALITY_OPTIONS[0];
+  const forceTranscode = quality !== 'auto';
+  const maxBitrate = preset.videoBitrate ?? 40_000_000;
+
   const res = await fetch(
     `${session.serverUrl}/Items/${item.id}/PlaybackInfo?UserId=${session.userId}`,
     {
@@ -333,10 +381,17 @@ export async function getPlaybackInfo(
       },
       body: JSON.stringify({
         DeviceProfile: {
-          MaxStreamingBitrate: 40_000_000,
-          DirectPlayProfiles: [
-            { Container: 'mp4,m4v,webm', Type: 'Video', VideoCodec: 'h264,vp9,av1', AudioCodec: 'aac,mp3,opus' },
-          ],
+          MaxStreamingBitrate: maxBitrate,
+          DirectPlayProfiles: forceTranscode
+            ? []
+            : [
+                {
+                  Container: 'mp4,m4v,webm',
+                  Type: 'Video',
+                  VideoCodec: 'h264,vp9,av1',
+                  AudioCodec: 'aac,mp3,opus',
+                },
+              ],
           TranscodingProfiles: [
             {
               Container: 'ts',
@@ -377,8 +432,9 @@ export async function getPlaybackInfo(
       url: `${session.serverUrl}/Videos/${item.id}/${mediaSourceId}/Subtitles/${s.Index}/0/Stream.vtt?api_key=${token}`,
     }));
 
-  // Prefer Direct Play for native browser MP4/WebM; otherwise use HLS (auto remux/transcode for MKV!)
+  // Prefer Direct Play only in 'auto' (Original) mode for native browser MP4/WebM
   const canDirectPlay =
+    !forceTranscode &&
     source.SupportsDirectPlay &&
     ['mp4', 'm4v', 'webm'].includes((source.Container || '').toLowerCase());
 
@@ -392,9 +448,25 @@ export async function getPlaybackInfo(
     };
   }
 
-  const hlsUrl = source.TranscodingUrl
-    ? `${session.serverUrl}${source.TranscodingUrl}`
-    : `${session.serverUrl}/Videos/${item.id}/master.m3u8?MediaSourceId=${mediaSourceId}&PlaySessionId=${playSessionId}&VideoCodec=h264&AudioCodec=aac&AudioBitrate=192000&VideoBitrate=12000000&MaxStreamingBitrate=12000000&DeviceId=${encodeURIComponent(getDeviceId())}&api_key=${token}`;
+  const hlsParams = new URLSearchParams({
+    MediaSourceId: mediaSourceId,
+    PlaySessionId: playSessionId,
+    VideoCodec: 'h264',
+    AudioCodec: 'aac',
+    AudioBitrate: '192000',
+    VideoBitrate: String(preset.videoBitrate ?? 12_000_000),
+    MaxStreamingBitrate: String(preset.videoBitrate ?? 12_000_000),
+    DeviceId: getDeviceId(),
+    api_key: session.accessToken,
+  });
+  if (preset.maxWidth) {
+    hlsParams.set('MaxWidth', String(preset.maxWidth));
+  }
+
+  const hlsUrl =
+    !forceTranscode && source.TranscodingUrl
+      ? `${session.serverUrl}${source.TranscodingUrl}`
+      : `${session.serverUrl}/Videos/${item.id}/master.m3u8?${hlsParams.toString()}`;
 
   return {
     streamUrl: hlsUrl,

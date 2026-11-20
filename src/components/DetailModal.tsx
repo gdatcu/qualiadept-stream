@@ -72,6 +72,7 @@ export const DetailModal: React.FC<DetailModalProps> = ({
 
   return (
     <div
+      data-tv-scope="modal"
       onClick={onClose}
       className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 p-4 backdrop-blur-md overflow-y-auto"
     >
@@ -191,8 +192,16 @@ export const DetailModal: React.FC<DetailModalProps> = ({
                   {episodes.map((ep) => (
                     <div
                       key={ep.id}
+                      role="button"
+                      tabIndex={0}
                       onClick={() => onPlay(ep)}
-                      className="group flex cursor-pointer items-center gap-4 rounded-xl border border-white/5 bg-obsidian/60 p-2.5 transition hover:border-violet-500/40 hover:bg-surface-elevated"
+                      onKeyDown={(e) => {
+                        if (e.key === 'Enter' || e.key === ' ') {
+                          e.preventDefault();
+                          onPlay(ep);
+                        }
+                      }}
+                      className="group flex cursor-pointer items-center gap-4 rounded-xl border border-white/5 bg-obsidian/60 p-2.5 transition hover:border-violet-500/40 hover:bg-surface-elevated focus:outline-none focus:ring-4 focus:ring-violet-400"
                     >
                       <div className="relative h-20 w-36 flex-shrink-0 overflow-hidden rounded-lg bg-surface">
                         <img

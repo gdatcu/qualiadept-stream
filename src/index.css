@@ -12,6 +12,13 @@
   body {
     overflow-x: hidden;
   }
+
+  button:focus-visible,
+  a:focus-visible,
+  select:focus-visible {
+    outline: 3px solid #a78bfa;
+    outline-offset: 2px;
+  }
 }
 
 .no-scrollbar::-webkit-scrollbar {
