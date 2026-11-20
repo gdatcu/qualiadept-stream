@@ -22,6 +22,11 @@ export const DetailModal: React.FC<DetailModalProps> = ({
   const [selectedSeasonId, setSelectedSeasonId] = useState<string>('');
   const [episodes, setEpisodes] = useState<MediaItem[]>([]);
   const [loadingEpisodes, setLoadingEpisodes] = useState(false);
+  const [imgFailed, setImgFailed] = useState(false);
+
+  useEffect(() => {
+    setImgFailed(false);
+  }, [item.id]);
 
   useEffect(() => {
     const onKeyDown = (e: KeyboardEvent) => {
@@ -90,12 +95,15 @@ export const DetailModal: React.FC<DetailModalProps> = ({
         </button>
 
         {/* Backdrop Header */}
-        <div className="relative h-64 sm:h-80 w-full overflow-hidden">
-          <img
-            src={item.backdropUrl}
-            alt={item.name}
-            className="h-full w-full object-cover"
-          />
+        <div className="relative h-64 sm:h-80 w-full overflow-hidden bg-gradient-to-br from-violet-950/80 via-surface-elevated to-obsidian">
+          {item.backdropUrl && !imgFailed && (
+            <img
+              src={item.backdropUrl}
+              alt={item.name}
+              onError={() => setImgFailed(true)}
+              className="h-full w-full object-cover"
+            />
+          )}
           <div className="absolute inset-0 bg-gradient-to-t from-surface via-surface/40 to-transparent" />
 
           <div className="absolute bottom-5 left-6 right-6">

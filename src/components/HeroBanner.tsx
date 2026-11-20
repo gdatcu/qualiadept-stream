@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { useEffect, useState } from 'react';
 import { Check, Info, Play, Plus, Star } from 'lucide-react';
 import type { MediaItem } from '../types/media';
 
@@ -15,14 +15,23 @@ export const HeroBanner: React.FC<HeroBannerProps> = ({
   onMoreInfo,
   onToggleFavorite,
 }) => {
+  const [imgFailed, setImgFailed] = useState(false);
+
+  useEffect(() => {
+    setImgFailed(false);
+  }, [item.id]);
+
   return (
-    <section className="relative h-[78vh] min-h-[540px] max-h-[820px] w-full overflow-hidden">
+    <section className="relative h-[78vh] min-h-[540px] max-h-[820px] w-full overflow-hidden bg-gradient-to-br from-violet-950/70 via-surface to-obsidian">
       {/* Backdrop Image */}
-      <img
-        src={item.backdropUrl}
-        alt={item.name}
-        className="h-full w-full object-cover object-center scale-[1.01]"
-      />
+      {item.backdropUrl && !imgFailed && (
+        <img
+          src={item.backdropUrl}
+          alt={item.name}
+          onError={() => setImgFailed(true)}
+          className="h-full w-full object-cover object-center scale-[1.01]"
+        />
+      )}
 
       {/* HBO Max / Netflix cinematic vignettes */}
       <div className="absolute inset-0 bg-gradient-to-t from-obsidian via-obsidian/55 to-obsidian/20" />

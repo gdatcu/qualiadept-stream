@@ -17,11 +17,25 @@ export const QUALITY_OPTIONS: QualityOption[] = [
   { id: '480p', label: '480p SD', description: '1.5 Mbps · Low data / weak 4G', maxWidth: 854, videoBitrate: 1_500_000 },
 ];
 
+export interface AudioTrack {
+  index: number;
+  label: string;
+  language: string;
+  codec?: string;
+  channels?: number;
+  isDefault?: boolean;
+}
+
 export interface SubtitleTrack {
   index: number;
   label: string;
   language: string;
-  url: string;
+  /** True for text subtitles (SRT/ASS/VTT) delivered as WebVTT; false for bitmap subtitles (PGS/VobSub) burned in via HLS */
+  isText: boolean;
+  codec?: string;
+  isDefault?: boolean;
+  isForced?: boolean;
+  url?: string;
 }
 
 export interface MediaItem {
@@ -63,6 +77,8 @@ export interface PlaybackInfo {
   isHls: boolean;
   mediaSourceId: string;
   playSessionId: string;
+  audioTracks: AudioTrack[];
+  defaultAudioIndex: number | null;
   subtitles: SubtitleTrack[];
 }
 

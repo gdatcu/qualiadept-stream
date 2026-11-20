@@ -3,6 +3,7 @@ import Hls from 'hls.js';
 import {
   ArrowLeft,
   Cast,
+  Check,
   Maximize,
   Minimize,
   Pause,
@@ -27,6 +28,7 @@ import {
   type MediaItem,
   type PlaybackInfo,
   type QualityPreset,
+  type SubtitleTrack,
 } from '../types/media';
 import {
   initCastSdk,
@@ -77,7 +79,9 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
   const [isFullscreen, setIsFullscreen] = useState(false);
   const [showControls, setShowControls] = useState(true);
 
-  const [activeSubtitle, setActiveSubtitle] = useState<number | null>(null);
+  const [selectedAudioIndex, setSelectedAudioIndex] = useState<number | null>(null);
+  const [activeTextSubIndex, setActiveTextSubIndex] = useState<number | null>(null);
+  const [burnInSubIndex, setBurnInSubIndex] = useState<number | null>(null);
   const [showSubMenu, setShowSubMenu] = useState(false);
   const [showQualityMenu, setShowQualityMenu] = useState(false);
 
@@ -95,12 +99,15 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
     return initCastSdk(setCastAvailable);
   }, []);
 
-  // Reset next-episode state when item changes
+  // Reset next-episode and track selection state when item changes
   useEffect(() => {
     let active = true;
     setNextEpisode(null);
     setNextCountdown(null);
     setNextDismissed(false);
+    setSelectedAudioIndex(null);
+    setActiveTextSubIndex(null);
+    setBurnInSubIndex(null);
     resumeOverrideRef.current = null;
 
     if (item.type === 'Episode') {
@@ -113,13 +120,16 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
     };
   }, [session, item]);
 
-  // Fetch stream URL & subtitle tracks whenever item or quality changes
+  // Fetch stream URL, audio & subtitle tracks whenever item, quality, audio, or burn-in subtitle changes
   useEffect(() => {
     let active = true;
     setLoading(true);
     setError(null);
 
-    getPlaybackInfo(session, item, quality)
+    getPlaybackInfo(session, item, quality, {
+      audioStreamIndex: selectedAudioIndex,
+      burnInSubtitleIndex: burnInSubIndex,
+    })
       .then((info) => {
         if (active) setPlayback(info);
       })
@@ -133,7 +143,7 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
     return () => {
       active = false;
     };
-  }, [session, item, quality]);
+  }, [session, item, quality, selectedAudioIndex, burnInSubIndex]);
 
   // Attach HLS.js or native video source
   useEffect(() => {
@@ -388,15 +398,72 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
     }
   };
 
-  const selectSubtitle = (trackIndex: number | null) => {
+  const textSubtitles = (playback?.subtitles || []).filter((s) => s.isText && s.url);
+
+  // Sync HTML5 <track> visibility whenever activeTextSubIndex or playback changes
+  useEffect(() => {
     const video = videoRef.current;
     if (!video) return;
-    for (let i = 0; i < video.textTracks.length; i++) {
-      video.textTracks[i].mode = i === trackIndex ? 'showing' : 'hidden';
+    const syncTracks = () => {
+      const targetPos =
+        activeTextSubIndex !== null
+          ? textSubtitles.findIndex((s) => s.index === activeTextSubIndex)
+          : -1;
+      for (let i = 0; i < video.textTracks.length; i++) {
+        video.textTracks[i].mode = i === targetPos ? 'showing' : 'hidden';
+      }
+    };
+    syncTracks();
+    const timer = window.setTimeout(syncTracks, 250);
+    return () => window.clearTimeout(timer);
+  }, [activeTextSubIndex, playback]);
+
+  const effectiveAudioIndex = selectedAudioIndex ?? playback?.defaultAudioIndex ?? null;
+
+  const handleAudioSelect = (audioIndex: number) => {
+    if (audioIndex === effectiveAudioIndex) {
+      setShowSubMenu(false);
+      return;
     }
-    setActiveSubtitle(trackIndex);
+    resumeOverrideRef.current = videoRef.current?.currentTime || 0;
+    setSelectedAudioIndex(audioIndex);
     setShowSubMenu(false);
+    wakeControls();
   };
+
+  const handleSubtitleSelect = (sub: SubtitleTrack | null) => {
+    if (!sub) {
+      setActiveTextSubIndex(null);
+      if (burnInSubIndex !== null) {
+        resumeOverrideRef.current = videoRef.current?.currentTime || 0;
+        setBurnInSubIndex(null);
+      }
+      setShowSubMenu(false);
+      wakeControls();
+      return;
+    }
+
+    if (sub.isText && sub.url) {
+      setActiveTextSubIndex(sub.index);
+      if (burnInSubIndex !== null) {
+        resumeOverrideRef.current = videoRef.current?.currentTime || 0;
+        setBurnInSubIndex(null);
+      }
+    } else {
+      // Bitmap subtitle (PGS / VobSub) — Jellyfin burns it into the HLS video stream
+      setActiveTextSubIndex(null);
+      if (burnInSubIndex !== sub.index) {
+        resumeOverrideRef.current = videoRef.current?.currentTime || 0;
+        setBurnInSubIndex(sub.index);
+      }
+    }
+    setShowSubMenu(false);
+    wakeControls();
+  };
+
+  const activeSubtitleIndex = burnInSubIndex ?? activeTextSubIndex;
+  const hasAudioOrSubs =
+    Boolean(playback && (playback.audioTracks.length > 0 || playback.subtitles.length > 0));
 
   const activeQualityLabel =
     QUALITY_OPTIONS.find((q) => q.id === quality)?.label || 'Original';
@@ -427,7 +494,7 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
         {...({ 'x-webkit-airplay': 'allow' } as Record<string, string>)}
         className="h-full w-full object-contain"
       >
-        {playback?.subtitles.map((sub) => (
+        {textSubtitles.map((sub) => (
           <track
             key={sub.index}
             kind="subtitles"
@@ -718,45 +785,110 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
               )}
             </div>
 
-            {/* Subtitles */}
-            {playback && playback.subtitles.length > 0 && (
+            {/* Audio & Subtitles */}
+            {hasAudioOrSubs && playback && (
               <div className="relative">
                 <button
                   onClick={() => {
                     setShowSubMenu(!showSubMenu);
                     setShowQualityMenu(false);
                   }}
+                  title="Audio & Subtitles"
                   className={`rounded-lg p-2 transition hover:bg-white/10 focus:outline-none focus:ring-2 focus:ring-violet-400 ${
-                    activeSubtitle !== null ? 'text-violet-400' : 'text-zinc-200'
+                    activeSubtitleIndex !== null ? 'text-violet-400' : 'text-zinc-200'
                   }`}
                 >
                   <Subtitles className="h-5 w-5" />
                 </button>
                 {showSubMenu && (
-                  <div className="absolute bottom-12 right-0 w-48 rounded-xl border border-white/15 bg-surface/95 p-1.5 shadow-2xl backdrop-blur-xl">
-                    <button
-                      onClick={() => selectSubtitle(null)}
-                      className={`w-full rounded-lg px-3 py-2 text-left text-xs font-medium ${
-                        activeSubtitle === null
-                          ? 'bg-violet-600 text-white'
-                          : 'text-zinc-300 hover:bg-white/10'
-                      }`}
-                    >
-                      Off
-                    </button>
-                    {playback.subtitles.map((sub, idx) => (
-                      <button
-                        key={sub.index}
-                        onClick={() => selectSubtitle(idx)}
-                        className={`w-full rounded-lg px-3 py-2 text-left text-xs font-medium ${
-                          activeSubtitle === idx
-                            ? 'bg-violet-600 text-white'
-                            : 'text-zinc-300 hover:bg-white/10'
-                        }`}
-                      >
-                        {sub.label}
-                      </button>
-                    ))}
+                  <div
+                    className={`absolute bottom-12 right-0 rounded-xl border border-white/15 bg-surface/95 p-2 shadow-2xl backdrop-blur-xl ${
+                      playback.audioTracks.length > 0 && playback.subtitles.length > 0
+                        ? 'grid w-[min(92vw,32rem)] grid-cols-1 gap-3 sm:grid-cols-2'
+                        : 'w-64'
+                    }`}
+                  >
+                    {/* Audio Tracks Column */}
+                    {playback.audioTracks.length > 0 && (
+                      <div className="flex flex-col">
+                        <div className="px-3 py-1.5 text-[11px] font-bold uppercase tracking-wider text-zinc-400">
+                          Audio
+                        </div>
+                        <div className="max-h-60 space-y-0.5 overflow-y-auto pr-0.5">
+                          {playback.audioTracks.map((track) => {
+                            const isSelected = effectiveAudioIndex === track.index;
+                            return (
+                              <button
+                                key={track.index}
+                                onClick={() => handleAudioSelect(track.index)}
+                                className={`flex w-full items-center justify-between gap-2 rounded-lg px-3 py-2 text-left text-xs font-medium transition ${
+                                  isSelected
+                                    ? 'bg-violet-600 text-white'
+                                    : 'text-zinc-200 hover:bg-white/10'
+                                }`}
+                              >
+                                <span className="truncate">{track.label}</span>
+                                {isSelected && <Check className="h-3.5 w-3.5 flex-shrink-0" />}
+                              </button>
+                            );
+                          })}
+                        </div>
+                      </div>
+                    )}
+
+                    {/* Subtitles Column */}
+                    {playback.subtitles.length > 0 && (
+                      <div className="flex flex-col">
+                        <div className="px-3 py-1.5 text-[11px] font-bold uppercase tracking-wider text-zinc-400">
+                          Subtitles
+                        </div>
+                        <div className="max-h-60 space-y-0.5 overflow-y-auto pr-0.5">
+                          <button
+                            onClick={() => handleSubtitleSelect(null)}
+                            className={`flex w-full items-center justify-between gap-2 rounded-lg px-3 py-2 text-left text-xs font-medium transition ${
+                              activeSubtitleIndex === null
+                                ? 'bg-violet-600 text-white'
+                                : 'text-zinc-300 hover:bg-white/10'
+                            }`}
+                          >
+                            <span>Off</span>
+                            {activeSubtitleIndex === null && (
+                              <Check className="h-3.5 w-3.5 flex-shrink-0" />
+                            )}
+                          </button>
+                          {playback.subtitles.map((sub) => {
+                            const isSelected = activeSubtitleIndex === sub.index;
+                            return (
+                              <button
+                                key={sub.index}
+                                onClick={() => handleSubtitleSelect(sub)}
+                                className={`flex w-full items-center justify-between gap-2 rounded-lg px-3 py-2 text-left text-xs font-medium transition ${
+                                  isSelected
+                                    ? 'bg-violet-600 text-white'
+                                    : 'text-zinc-200 hover:bg-white/10'
+                                }`}
+                              >
+                                <span className="truncate">{sub.label}</span>
+                                <span className="flex flex-shrink-0 items-center gap-1.5">
+                                  {!sub.isText && (
+                                    <span
+                                      className={`rounded px-1 py-0.5 text-[9px] font-bold uppercase ${
+                                        isSelected
+                                          ? 'bg-white/20 text-white'
+                                          : 'bg-white/10 text-zinc-400'
+                                      }`}
+                                    >
+                                      {sub.codec ? sub.codec.replace('sub', '').toUpperCase() : 'IMG'}
+                                    </span>
+                                  )}
+                                  {isSelected && <Check className="h-3.5 w-3.5" />}
+                                </span>
+                              </button>
+                            );
+                          })}
+                        </div>
+                      </div>
+                    )}
                   </div>
                 )}
               </div>

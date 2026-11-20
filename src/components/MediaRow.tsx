@@ -75,16 +75,27 @@ export const MediaRow: React.FC<MediaRowProps> = ({
             }`}
           >
             <div
-              className={`relative w-full overflow-hidden bg-surface-elevated ${
+              className={`relative w-full overflow-hidden bg-gradient-to-br from-violet-950/70 via-surface-elevated to-obsidian ${
                 showProgress ? 'aspect-video' : 'aspect-[2/3]'
               }`}
             >
-              <img
-                src={showProgress ? item.backdropUrl : item.posterUrl}
-                alt={item.name}
-                loading="lazy"
-                className="h-full w-full object-cover transition duration-500 group-hover/card:scale-105"
-              />
+              {(showProgress ? item.backdropUrl : item.posterUrl) ? (
+                <img
+                  src={showProgress ? item.backdropUrl : item.posterUrl}
+                  alt={item.name}
+                  loading="lazy"
+                  onError={(e) => {
+                    e.currentTarget.style.display = 'none';
+                  }}
+                  className="h-full w-full object-cover transition duration-500 group-hover/card:scale-105"
+                />
+              ) : (
+                <div className="flex h-full w-full items-center justify-center p-4 text-center">
+                  <span className="text-sm font-bold text-zinc-400 line-clamp-3">
+                    {item.name}
+                  </span>
+                </div>
+              )}
 
               {/* Hover Play Overlay */}
               <div className="absolute inset-0 flex items-center justify-center bg-obsidian/50 opacity-0 transition group-hover/card:opacity-100">

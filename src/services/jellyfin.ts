@@ -1,6 +1,7 @@
 import { DEMO_EPISODES, DEMO_ITEMS, DEMO_SEASONS } from '../data/demoCatalog';
 import {
   QUALITY_OPTIONS,
+  type AudioTrack,
   type AuthSession,
   type MediaItem,
   type MediaType,
@@ -132,14 +133,22 @@ function mapJellyfinItem(raw: RawJellyfinItem, session: AuthSession): MediaItem 
   const base = session.serverUrl;
   const token = encodeURIComponent(session.accessToken);
 
-  const posterUrl = raw.ImageTags?.Primary
+  const hasPrimary = Boolean(raw.ImageTags?.Primary);
+  const hasBackdrop = Boolean(raw.BackdropImageTags && raw.BackdropImageTags.length > 0);
+  const hasParentBackdrop = Boolean(
+    raw.ParentBackdropItemId && raw.ParentBackdropImageTags?.length
+  );
+
+  const posterUrl = hasPrimary
     ? `${base}/Items/${raw.Id}/Images/Primary?fillHeight=600&fillWidth=400&quality=90&api_key=${token}`
-    : `${base}/Items/${raw.Id}/Images/Backdrop?fillHeight=600&fillWidth=400&quality=85&api_key=${token}`;
+    : hasBackdrop
+    ? `${base}/Items/${raw.Id}/Images/Backdrop/0?fillHeight=600&fillWidth=400&quality=85&api_key=${token}`
+    : '';
 
   let backdropUrl = posterUrl;
-  if (raw.BackdropImageTags && raw.BackdropImageTags.length > 0) {
+  if (hasBackdrop) {
     backdropUrl = `${base}/Items/${raw.Id}/Images/Backdrop/0?maxWidth=1920&quality=88&api_key=${token}`;
-  } else if (raw.ParentBackdropItemId && raw.ParentBackdropImageTags?.length) {
+  } else if (hasParentBackdrop) {
     backdropUrl = `${base}/Items/${raw.ParentBackdropItemId}/Images/Backdrop/0?maxWidth=1920&quality=88&api_key=${token}`;
   }
 
@@ -351,10 +360,51 @@ export async function fetchNextEpisode(
   }
 }
 
+export interface PlaybackOptions {
+  audioStreamIndex?: number | null;
+  /** Jellyfin stream index for an image-based subtitle (PGS/VobSub) to burn into the HLS stream */
+  burnInSubtitleIndex?: number | null;
+}
+
+interface RawMediaStream {
+  Type: string;
+  Index: number;
+  DisplayTitle?: string;
+  Language?: string;
+  Title?: string;
+  Codec?: string;
+  Channels?: number;
+  IsDefault?: boolean;
+  IsForced?: boolean;
+  IsTextSubtitleStream?: boolean;
+}
+
+function formatAudioLabel(s: RawMediaStream): string {
+  if (s.DisplayTitle) return s.DisplayTitle;
+  const parts: string[] = [];
+  if (s.Title) parts.push(s.Title);
+  else if (s.Language) parts.push(s.Language.toUpperCase());
+  else parts.push(`Track #${s.Index}`);
+  if (s.Codec) parts.push(s.Codec.toUpperCase());
+  if (s.Channels) parts.push(s.Channels === 6 ? '5.1' : s.Channels === 8 ? '7.1' : `${s.Channels}ch`);
+  return parts.join(' · ');
+}
+
+function formatSubtitleLabel(s: RawMediaStream): string {
+  if (s.DisplayTitle) return s.DisplayTitle;
+  const parts: string[] = [];
+  if (s.Title) parts.push(s.Title);
+  else if (s.Language) parts.push(s.Language.toUpperCase());
+  else parts.push(`Subtitle #${s.Index}`);
+  if (s.IsForced) parts.push('Forced');
+  return parts.join(' · ');
+}
+
 export async function getPlaybackInfo(
   session: AuthSession,
   item: MediaItem,
-  quality: QualityPreset = 'auto'
+  quality: QualityPreset = 'auto',
+  options: PlaybackOptions = {}
 ): Promise<PlaybackInfo> {
   if (session.isDemo) {
     const url = item.demoStreamUrl || 'https://test-streams.mux.dev/x36xhzz/x36xhzz.m3u8';
@@ -363,13 +413,61 @@ export async function getPlaybackInfo(
       isHls: url.endsWith('.m3u8'),
       mediaSourceId: item.id,
       playSessionId: `demo-${Date.now()}`,
+      audioTracks: [],
+      defaultAudioIndex: null,
       subtitles: item.demoSubtitles || [],
     };
   }
 
   const preset = QUALITY_OPTIONS.find((q) => q.id === quality) || QUALITY_OPTIONS[0];
-  const forceTranscode = quality !== 'auto';
+  const needsBurnIn = options.burnInSubtitleIndex !== undefined && options.burnInSubtitleIndex !== null;
+  const hasExplicitAudio = options.audioStreamIndex !== undefined && options.audioStreamIndex !== null;
+  const forceTranscode = quality !== 'auto' || needsBurnIn;
   const maxBitrate = preset.videoBitrate ?? 40_000_000;
+
+  const playbackBody: Record<string, unknown> = {
+    DeviceProfile: {
+      MaxStreamingBitrate: maxBitrate,
+      DirectPlayProfiles:
+        forceTranscode || hasExplicitAudio
+          ? []
+          : [
+              {
+                Container: 'mp4,m4v,webm',
+                Type: 'Video',
+                VideoCodec: 'h264,vp9,av1',
+                AudioCodec: 'aac,mp3,opus',
+              },
+            ],
+      TranscodingProfiles: [
+        {
+          Container: 'ts',
+          Type: 'Video',
+          VideoCodec: 'h264',
+          AudioCodec: 'aac',
+          Protocol: 'hls',
+          Context: 'Streaming',
+          MaxAudioChannels: '2',
+          SegmentLength: 6,
+        },
+      ],
+      SubtitleProfiles: [
+        { Format: 'vtt', Method: 'External' },
+        { Format: 'srt', Method: 'External' },
+        { Format: 'ass', Method: 'External' },
+        { Format: 'ssa', Method: 'External' },
+        { Format: 'subrip', Method: 'External' },
+        { Format: 'pgssub', Method: 'Encode' },
+        { Format: 'dvdsub', Method: 'Encode' },
+      ],
+    },
+  };
+
+  if (hasExplicitAudio) {
+    playbackBody.AudioStreamIndex = options.audioStreamIndex;
+  }
+  // Explicitly set SubtitleStreamIndex: -1 prevents Jellyfin from auto-burning a default PGS subtitle unless chosen
+  playbackBody.SubtitleStreamIndex = needsBurnIn ? options.burnInSubtitleIndex : -1;
 
   const res = await fetch(
     `${session.serverUrl}/Items/${item.id}/PlaybackInfo?UserId=${session.userId}`,
@@ -379,37 +477,7 @@ export async function getPlaybackInfo(
         'Content-Type': 'application/json',
         Authorization: buildAuthHeader(session.accessToken),
       },
-      body: JSON.stringify({
-        DeviceProfile: {
-          MaxStreamingBitrate: maxBitrate,
-          DirectPlayProfiles: forceTranscode
-            ? []
-            : [
-                {
-                  Container: 'mp4,m4v,webm',
-                  Type: 'Video',
-                  VideoCodec: 'h264,vp9,av1',
-                  AudioCodec: 'aac,mp3,opus',
-                },
-              ],
-          TranscodingProfiles: [
-            {
-              Container: 'ts',
-              Type: 'Video',
-              VideoCodec: 'h264',
-              AudioCodec: 'aac',
-              Protocol: 'hls',
-              Context: 'Streaming',
-              MaxAudioChannels: '2',
-              SegmentLength: 6,
-            },
-          ],
-          SubtitleProfiles: [
-            { Format: 'vtt', Method: 'External' },
-            { Format: 'srt', Method: 'External' },
-          ],
-        },
-      }),
+      body: JSON.stringify(playbackBody),
     }
   );
 
@@ -421,20 +489,52 @@ export async function getPlaybackInfo(
   const playSessionId: string = data.PlaySessionId || crypto.randomUUID();
   const mediaSourceId: string = source.Id;
   const token = encodeURIComponent(session.accessToken);
+  const streams: RawMediaStream[] = source.MediaStreams || [];
 
-  // Extract text subtitles as WebVTT URLs
-  const subtitles: SubtitleTrack[] = (source.MediaStreams || [])
-    .filter((s: { Type: string; IsTextSubtitleStream?: boolean }) => s.Type === 'Subtitle' && s.IsTextSubtitleStream)
-    .map((s: { Index: number; DisplayTitle?: string; Language?: string }) => ({
+  // Extract all Audio tracks
+  const audioTracks: AudioTrack[] = streams
+    .filter((s) => s.Type === 'Audio')
+    .map((s) => ({
       index: s.Index,
-      label: s.DisplayTitle || s.Language || `Subtitle #${s.Index}`,
+      label: formatAudioLabel(s),
       language: s.Language || 'und',
-      url: `${session.serverUrl}/Videos/${item.id}/${mediaSourceId}/Subtitles/${s.Index}/0/Stream.vtt?api_key=${token}`,
+      codec: s.Codec,
+      channels: s.Channels,
+      isDefault: Boolean(s.IsDefault),
     }));
 
-  // Prefer Direct Play only in 'auto' (Original) mode for native browser MP4/WebM
+  const defaultAudioIndex: number | null =
+    typeof source.DefaultAudioStreamIndex === 'number'
+      ? source.DefaultAudioStreamIndex
+      : audioTracks.find((a) => a.isDefault)?.index ?? audioTracks[0]?.index ?? null;
+
+  const effectiveAudioIndex = hasExplicitAudio ? options.audioStreamIndex! : defaultAudioIndex;
+
+  // Extract ALL subtitles: text subtitles via WebVTT, bitmap subtitles (PGS/VobSub) via Jellyfin HLS burn-in
+  const subtitles: SubtitleTrack[] = streams
+    .filter((s) => s.Type === 'Subtitle')
+    .map((s) => {
+      const isText = Boolean(s.IsTextSubtitleStream);
+      return {
+        index: s.Index,
+        label: formatSubtitleLabel(s),
+        language: s.Language || 'und',
+        isText,
+        codec: s.Codec,
+        isDefault: Boolean(s.IsDefault),
+        isForced: Boolean(s.IsForced),
+        url: isText
+          ? `${session.serverUrl}/Videos/${item.id}/${mediaSourceId}/Subtitles/${s.Index}/0/Stream.vtt?api_key=${token}`
+          : undefined,
+      };
+    });
+
+  // Prefer Direct Play only in 'auto' mode for native browser MP4/WebM when no burn-in or custom audio track is needed
+  const isNonDefaultAudio =
+    hasExplicitAudio && defaultAudioIndex !== null && options.audioStreamIndex !== defaultAudioIndex;
   const canDirectPlay =
     !forceTranscode &&
+    !isNonDefaultAudio &&
     source.SupportsDirectPlay &&
     ['mp4', 'm4v', 'webm'].includes((source.Container || '').toLowerCase());
 
@@ -444,35 +544,58 @@ export async function getPlaybackInfo(
       isHls: false,
       mediaSourceId,
       playSessionId,
+      audioTracks,
+      defaultAudioIndex,
       subtitles,
     };
   }
 
-  const hlsParams = new URLSearchParams({
-    MediaSourceId: mediaSourceId,
-    PlaySessionId: playSessionId,
-    VideoCodec: 'h264',
-    AudioCodec: 'aac',
-    AudioBitrate: '192000',
-    VideoBitrate: String(preset.videoBitrate ?? 12_000_000),
-    MaxStreamingBitrate: String(preset.videoBitrate ?? 12_000_000),
-    DeviceId: getDeviceId(),
-    api_key: session.accessToken,
-  });
-  if (preset.maxWidth) {
-    hlsParams.set('MaxWidth', String(preset.maxWidth));
+  let hlsUrl: string;
+  if (!forceTranscode && source.TranscodingUrl) {
+    const parsed = new URL(`${session.serverUrl}${source.TranscodingUrl}`);
+    if (effectiveAudioIndex !== null) {
+      parsed.searchParams.set('AudioStreamIndex', String(effectiveAudioIndex));
+    }
+    if (needsBurnIn) {
+      parsed.searchParams.set('SubtitleStreamIndex', String(options.burnInSubtitleIndex));
+      parsed.searchParams.set('SubtitleMethod', 'Encode');
+    } else {
+      parsed.searchParams.delete('SubtitleStreamIndex');
+      parsed.searchParams.delete('SubtitleMethod');
+    }
+    hlsUrl = parsed.toString();
+  } else {
+    const hlsParams = new URLSearchParams({
+      MediaSourceId: mediaSourceId,
+      PlaySessionId: playSessionId,
+      VideoCodec: 'h264',
+      AudioCodec: 'aac',
+      AudioBitrate: '192000',
+      VideoBitrate: String(preset.videoBitrate ?? 12_000_000),
+      MaxStreamingBitrate: String(preset.videoBitrate ?? 12_000_000),
+      DeviceId: getDeviceId(),
+      api_key: session.accessToken,
+    });
+    if (preset.maxWidth) {
+      hlsParams.set('MaxWidth', String(preset.maxWidth));
+    }
+    if (effectiveAudioIndex !== null) {
+      hlsParams.set('AudioStreamIndex', String(effectiveAudioIndex));
+    }
+    if (needsBurnIn) {
+      hlsParams.set('SubtitleStreamIndex', String(options.burnInSubtitleIndex));
+      hlsParams.set('SubtitleMethod', 'Encode');
+    }
+    hlsUrl = `${session.serverUrl}/Videos/${item.id}/master.m3u8?${hlsParams.toString()}`;
   }
-
-  const hlsUrl =
-    !forceTranscode && source.TranscodingUrl
-      ? `${session.serverUrl}${source.TranscodingUrl}`
-      : `${session.serverUrl}/Videos/${item.id}/master.m3u8?${hlsParams.toString()}`;
 
   return {
     streamUrl: hlsUrl,
     isHls: true,
     mediaSourceId,
     playSessionId,
+    audioTracks,
+    defaultAudioIndex,
     subtitles,
   };
 }
