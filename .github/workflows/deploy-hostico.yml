@@ -1,13 +1,17 @@
-name: Deploy to Hostico (stream.qualiadept.eu)
+name: Build & Deploy Qualiadept Stream (Web + Android APK Releases)
 
 on:
   push:
-    branches: [main]
+    branches:
+      - main
   workflow_dispatch:
+
+permissions:
+  contents: write
 
 jobs:
   build-and-deploy:
-    name: Build & Deploy to Hostico
+    name: Build & Deploy to Hostico (stream.qualiadept.eu)
     runs-on: ubuntu-latest
 
     steps:
@@ -17,8 +21,8 @@ jobs:
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
-          node-version: 20
-          cache: npm
+          node-version: '22'
+          cache: 'npm'
 
       - name: Install dependencies
         run: npm ci
@@ -32,8 +36,73 @@ jobs:
           server: ${{ secrets.FTP_SERVER }}
           username: ${{ secrets.FTP_USERNAME }}
           password: ${{ secrets.FTP_PASSWORD }}
-          protocol: ftps
-          security: loose
           local-dir: ./dist/
           server-dir: ${{ secrets.FTP_SERVER_DIR || './' }}
-          dangerous-clean-slate: false
+          protocol: ftps
+          port: 21
+          security: loose
+          exclude: |
+            **/.git*
+            **/.git*/**
+            **/node_modules/**
+
+  build-android-apk:
+    name: Build Qualiadept Stream Android APK
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: 'npm'
+
+      - name: Setup Java 21
+        uses: actions/setup-java@v4
+        with:
+          distribution: 'temurin'
+          java-version: '21'
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Build web app for Capacitor
+        run: npm run build
+
+      - name: Add & Sync Capacitor Android project
+        run: |
+          npx cap add android
+          npx cap sync android
+
+      - name: Build Android APK (Debug)
+        working-directory: android
+        run: |
+          chmod +x gradlew
+          ./gradlew assembleDebug
+
+      - name: Prepare versioned APK file
+        run: |
+          mkdir -p release-assets
+          cp android/app/build/outputs/apk/debug/app-debug.apk "release-assets/Qualiadept-Stream-v1.0.${{ github.run_number }}.apk"
+
+      - name: Upload APK Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: Qualiadept-Stream-Android-APK
+          path: release-assets/Qualiadept-Stream-v1.0.${{ github.run_number }}.apk
+          retention-days: 30
+
+      - name: Publish GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: v1.0.${{ github.run_number }}
+          name: "Qualiadept Stream v1.0.${{ github.run_number }} (Android)"
+          body: |
+            Versiune nouă pentru aplicația mobilă **Qualiadept Stream** (1-la-1 cu `https://stream.qualiadept.eu`).
+            Descarcă fișierul `.apk` de mai jos direct pe telefonul Android pentru instalare.
+          files: release-assets/Qualiadept-Stream-v1.0.${{ github.run_number }}.apk
+          draft: false
+          prerelease: false
