@@ -1,6 +1,7 @@
 import React, { useEffect, useState } from 'react';
-import { Film, LogOut, Search, X } from 'lucide-react';
+import { LogOut, Search, X } from 'lucide-react';
 import type { AuthSession } from '../types/media';
+import { BrandLogo } from './BrandLogo';
 
 export type NavTab = 'home' | 'movies' | 'series' | 'mylist';
 
@@ -53,18 +54,9 @@ export const Navbar: React.FC<NavbarProps> = ({
               onTabChange('home');
               onSearchChange('');
             }}
-            className="flex items-center gap-2 text-left flex-shrink-0"
+            className="flex-shrink-0 transition hover:opacity-90"
           >
-            <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-gradient-to-br from-violet-500 to-indigo-600 shadow-md shadow-violet-600/30">
-              <Film className="h-4 w-4 text-white" />
-            </div>
-            <span
-              className={`text-sm sm:text-lg font-black tracking-tight text-white ${
-                searchOpen ? 'hidden sm:inline' : 'inline'
-              }`}
-            >
-              QUALIADEPT<span className="text-violet-400">.STREAM</span>
-            </span>
+            <BrandLogo size="sm" hideTextOnMobile={searchOpen} />
           </button>
 
           <nav className="hidden md:flex items-center gap-1">

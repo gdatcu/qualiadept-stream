@@ -1,7 +1,8 @@
 import React, { useState } from 'react';
-import { Film, Lock, Play, Server, Sparkles, User } from 'lucide-react';
+import { Lock, Play, Server, Sparkles, User } from 'lucide-react';
 import { authenticateJellyfin, createDemoSession } from '../services/jellyfin';
 import type { AuthSession } from '../types/media';
+import { BrandLogo } from './BrandLogo';
 
 interface LoginScreenProps {
   onLogin: (session: AuthSession) => void;
@@ -46,13 +47,8 @@ export const LoginScreen: React.FC<LoginScreenProps> = ({ onLogin }) => {
       <div className="relative z-10 w-full max-w-md animate-fade-in">
         {/* Brand */}
         <div className="mb-8 text-center">
-          <div className="mx-auto mb-4 flex h-14 w-14 items-center justify-center rounded-2xl bg-gradient-to-br from-violet-500 to-indigo-600 shadow-lg shadow-violet-600/30">
-            <Film className="h-7 w-7 text-white" />
-          </div>
-          <h1 className="text-3xl font-black tracking-tight text-white">
-            QUALIADEPT<span className="text-violet-400">.STREAM</span>
-          </h1>
-          <p className="mt-2 text-sm text-zinc-400">
+          <BrandLogo size="lg" stacked />
+          <p className="mt-3 text-sm text-zinc-400">
             Private Cinema powered by Google Drive &amp; Oracle Cloud
           </p>
         </div>
