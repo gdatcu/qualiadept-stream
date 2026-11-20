@@ -2,6 +2,7 @@ import React, { useEffect, useRef, useState } from 'react';
 import Hls from 'hls.js';
 import {
   ArrowLeft,
+  Cast,
   Maximize,
   Minimize,
   Pause,
@@ -27,6 +28,14 @@ import {
   type PlaybackInfo,
   type QualityPreset,
 } from '../types/media';
+import {
+  initCastSdk,
+  showAirPlayPicker,
+  startChromecast,
+  stopChromecast,
+  supportsAirPlay,
+  toggleChromecastPlayPause,
+} from '../utils/chromecast';
 
 interface VideoPlayerProps {
   session: AuthSession;
@@ -76,6 +85,15 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
   const [nextEpisode, setNextEpisode] = useState<MediaItem | null>(null);
   const [nextCountdown, setNextCountdown] = useState<number | null>(null);
   const [nextDismissed, setNextDismissed] = useState(false);
+
+  // Chromecast / AirPlay state
+  const [castAvailable, setCastAvailable] = useState(false);
+  const [castDeviceName, setCastDeviceName] = useState<string | null>(null);
+  const [castNotice, setCastNotice] = useState<string | null>(null);
+
+  useEffect(() => {
+    return initCastSdk(setCastAvailable);
+  }, []);
 
   // Reset next-episode state when item changes
   useEffect(() => {
@@ -312,6 +330,54 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
     wakeControls();
   };
 
+  const handleCastClick = async () => {
+    wakeControls();
+
+    // If already casting, stop casting and resume local playback
+    if (castDeviceName) {
+      stopChromecast();
+      setCastDeviceName(null);
+      videoRef.current?.play().catch(() => {});
+      return;
+    }
+
+    // Safari AirPlay
+    if (supportsAirPlay(videoRef.current)) {
+      showAirPlayPicker(videoRef.current);
+      return;
+    }
+
+    if (!playback) return;
+
+    try {
+      setCastNotice(null);
+      const device = await startChromecast({
+        streamUrl: playback.streamUrl,
+        isHls: playback.isHls,
+        title: item.name,
+        subtitle: item.seriesName
+          ? `${item.seriesName} · S${item.seasonNumber}E${item.episodeNumber}`
+          : undefined,
+        posterUrl: item.backdropUrl || item.posterUrl,
+        currentTime: videoRef.current?.currentTime || 0,
+      });
+      if (device) {
+        videoRef.current?.pause();
+        setCastDeviceName(device);
+      }
+    } catch (err) {
+      const msg =
+        err instanceof Error
+          ? err.message
+          : 'No Chromecast device selected. Use Chrome or Edge on the same Wi-Fi as your TV.';
+      // Ignore user cancelling the cast picker dialog
+      if (!String(msg).toLowerCase().includes('cancel')) {
+        setCastNotice(msg);
+        window.setTimeout(() => setCastNotice(null), 5000);
+      }
+    }
+  };
+
   const toggleFullscreen = () => {
     if (!document.fullscreenElement) {
       containerRef.current?.requestFullscreen();
@@ -402,6 +468,45 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
               Back to Browse
             </button>
           </div>
+        </div>
+      )}
+
+      {/* Casting to TV Overlay */}
+      {castDeviceName && (
+        <div className="absolute inset-0 z-20 flex flex-col items-center justify-center bg-obsidian/95 p-6 text-center backdrop-blur-md">
+          <img
+            src={item.backdropUrl || item.posterUrl}
+            alt={item.name}
+            className="mb-6 h-44 w-72 rounded-2xl object-cover shadow-2xl border border-white/15"
+          />
+          <div className="flex items-center gap-2 text-violet-400">
+            <Cast className="h-5 w-5" />
+            <span className="text-xs font-bold uppercase tracking-wider">
+              Casting to {castDeviceName}
+            </span>
+          </div>
+          <h3 className="mt-2 text-2xl font-black text-white">{item.name}</h3>
+          <div className="mt-6 flex items-center gap-3">
+            <button
+              onClick={() => toggleChromecastPlayPause()}
+              className="rounded-xl bg-white px-5 py-2.5 text-sm font-bold text-obsidian hover:bg-zinc-200"
+            >
+              Play / Pause on TV
+            </button>
+            <button
+              onClick={handleCastClick}
+              className="rounded-xl border border-white/20 bg-white/10 px-5 py-2.5 text-sm font-semibold text-white hover:bg-white/20"
+            >
+              Stop Casting
+            </button>
+          </div>
+        </div>
+      )}
+
+      {/* Transient Cast Notice */}
+      {castNotice && (
+        <div className="absolute top-20 left-1/2 z-30 -translate-x-1/2 rounded-xl border border-violet-500/40 bg-surface/95 px-4 py-2.5 text-xs font-medium text-zinc-200 shadow-xl backdrop-blur-md">
+          {castNotice}
         </div>
       )}
 
@@ -656,6 +761,23 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
                 )}
               </div>
             )}
+
+            {/* Chromecast / AirPlay Button */}
+            <button
+              onClick={handleCastClick}
+              title={
+                castDeviceName
+                  ? `Casting to ${castDeviceName} (click to stop)`
+                  : castAvailable
+                  ? 'Cast to Chromecast / TV'
+                  : 'Cast to TV (Chrome / Edge / Safari AirPlay)'
+              }
+              className={`rounded-lg p-2 transition hover:bg-white/10 focus:outline-none focus:ring-2 focus:ring-violet-400 ${
+                castDeviceName ? 'text-violet-400 bg-violet-500/20' : 'text-zinc-200'
+              }`}
+            >
+              <Cast className="h-5 w-5" />
+            </button>
 
             <button
               onClick={toggleFullscreen}
