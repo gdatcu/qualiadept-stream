@@ -47,18 +47,22 @@ export const Navbar: React.FC<NavbarProps> = ({
     >
       <div className="mx-auto flex max-w-[1600px] items-center justify-between px-4 py-3.5 sm:px-8">
         {/* Left: Brand + Nav */}
-        <div className="flex items-center gap-8">
+        <div className="flex items-center gap-4 md:gap-8 min-w-0">
           <button
             onClick={() => {
               onTabChange('home');
               onSearchChange('');
             }}
-            className="flex items-center gap-2.5 text-left"
+            className="flex items-center gap-2 text-left flex-shrink-0"
           >
             <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-gradient-to-br from-violet-500 to-indigo-600 shadow-md shadow-violet-600/30">
               <Film className="h-4 w-4 text-white" />
             </div>
-            <span className="text-lg font-black tracking-tight text-white">
+            <span
+              className={`text-sm sm:text-lg font-black tracking-tight text-white ${
+                searchOpen ? 'hidden sm:inline' : 'inline'
+              }`}
+            >
               QUALIADEPT<span className="text-violet-400">.STREAM</span>
             </span>
           </button>
