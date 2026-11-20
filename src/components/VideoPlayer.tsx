@@ -84,6 +84,7 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
 }) => {
   const containerRef = useRef<HTMLDivElement>(null);
   const videoRef = useRef<HTMLVideoElement>(null);
+  const hlsRef = useRef<Hls | null>(null);
   const brightnessTrackRef = useRef<HTMLDivElement>(null);
   const resumeOverrideRef = useRef<number | null>(null);
   const swipeStartRef = useRef<{ y: number; startBrightness: number; moved: boolean } | null>(null);
@@ -94,6 +95,7 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [buffering, setBuffering] = useState(false);
+  const [slowBuffering, setSlowBuffering] = useState(false);
   const [retryNonce, setRetryNonce] = useState(0);
 
   const [playing, setPlaying] = useState(true);
@@ -277,7 +279,7 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
     };
   }, [session, item, quality, selectedAudioIndex, burnInSubIndex, retryNonce]);
 
-  // Attach HLS.js (with resilient mobile 5G auto-recovery) or native video source
+  // Attach HLS.js (with resilient mobile 5G auto-recovery & direct startPosition) or native video source
   useEffect(() => {
     if (!playback || !videoRef.current) return;
     const video = videoRef.current;
@@ -286,17 +288,17 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
     let mediaRetries = 0;
     let retryTimer: number | null = null;
 
-    const startPlayback = () => {
-      const seekTarget =
-        resumeOverrideRef.current !== null
-          ? resumeOverrideRef.current
-          : item.resumePositionSeconds && item.resumePositionSeconds > 5
-          ? item.resumePositionSeconds
-          : 0;
-      resumeOverrideRef.current = null;
+    const initialSeekTarget =
+      resumeOverrideRef.current !== null
+        ? resumeOverrideRef.current
+        : item.resumePositionSeconds && item.resumePositionSeconds > 5
+        ? item.resumePositionSeconds
+        : 0;
+    resumeOverrideRef.current = null;
 
-      if (seekTarget > 0) {
-        video.currentTime = seekTarget;
+    const startPlayback = () => {
+      if (!playback.isHls && initialSeekTarget > 0) {
+        video.currentTime = initialSeekTarget;
       }
       video
         .play()
@@ -309,12 +311,13 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
         });
       setLoading(false);
       setBuffering(false);
+      setSlowBuffering(false);
       reportPlaybackProgress(
         session,
         item.id,
         playback.mediaSourceId,
         playback.playSessionId,
-        video.currentTime,
+        initialSeekTarget || video.currentTime,
         false,
         'start'
       );
@@ -324,12 +327,13 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
       hls = new Hls({
         enableWorker: true,
         lowLatencyMode: false,
-        maxBufferLength: 45,
-        maxMaxBufferLength: 120,
-        maxBufferHole: 1.0,
-        maxStarvationDelay: 8,
-        nudgeOffset: 0.2,
-        nudgeMaxRetry: 10,
+        startPosition: initialSeekTarget > 0 ? initialSeekTarget : -1,
+        maxBufferLength: 30,
+        maxMaxBufferLength: 90,
+        maxBufferHole: 1.5,
+        maxStarvationDelay: 6,
+        nudgeOffset: 0.25,
+        nudgeMaxRetry: 12,
         fragLoadingTimeOut: 30_000,
         manifestLoadingTimeOut: 20_000,
         levelLoadingTimeOut: 20_000,
@@ -337,12 +341,14 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
         manifestLoadingMaxRetry: 4,
         levelLoadingMaxRetry: 4,
       });
+      hlsRef.current = hls;
       hls.loadSource(playback.streamUrl);
       hls.attachMedia(video);
       hls.on(Hls.Events.MANIFEST_PARSED, startPlayback);
       hls.on(Hls.Events.FRAG_BUFFERED, () => {
         networkRetries = 0;
         setBuffering(false);
+        setSlowBuffering(false);
       });
       hls.on(Hls.Events.ERROR, (_ev, data) => {
         if (!data.fatal) {
@@ -357,7 +363,7 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
           networkRetries += 1;
           setBuffering(true);
           retryTimer = window.setTimeout(() => {
-            hls?.startLoad();
+            hls?.startLoad(video.currentTime || initialSeekTarget || -1);
           }, 800 * networkRetries);
           return;
         }
@@ -372,15 +378,18 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
         setError(`Stream interrupted (${data.details}). Tap Retry or try a lower quality.`);
         setLoading(false);
         setBuffering(false);
+        setSlowBuffering(false);
         setShowControls(true);
       });
     } else {
+      hlsRef.current = null;
       video.src = playback.streamUrl;
       video.addEventListener('loadedmetadata', startPlayback, { once: true });
     }
 
     return () => {
       if (retryTimer) window.clearTimeout(retryTimer);
+      hlsRef.current = null;
       if (playback) {
         reportPlaybackProgress(
           session,
@@ -395,6 +404,28 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
       if (hls) hls.destroy();
     };
   }, [playback, session, item]);
+
+  // Stall recovery watchdog: if stuck buffering on mobile data > 5s, nudge MSE decoder & offer quick 720p/Retry pill
+  useEffect(() => {
+    if (!buffering || loading || error) {
+      setSlowBuffering(false);
+      return;
+    }
+
+    const nudgeTimer = window.setTimeout(() => {
+      setSlowBuffering(true);
+      const video = videoRef.current;
+      const hls = hlsRef.current;
+      if (video && hls && !video.paused) {
+        const nextPos = (video.currentTime || 0) + 0.3;
+        video.currentTime = nextPos;
+        hls.startLoad(nextPos);
+        video.play().catch(() => {});
+      }
+    }, 5000);
+
+    return () => window.clearTimeout(nudgeTimer);
+  }, [buffering, loading, error]);
 
   // Sync progress with Jellyfin every 10s
   useEffect(() => {
@@ -873,11 +904,47 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
 
       {/* Loading / Buffering Spinner */}
       {(loading || buffering) && !error && (
-        <div className="pointer-events-none absolute inset-0 z-10 flex flex-col items-center justify-center bg-black/40">
+        <div className="pointer-events-none absolute inset-0 z-10 flex flex-col items-center justify-center bg-black/40 px-4">
           <div className="h-12 w-12 animate-spin rounded-full border-4 border-violet-500 border-t-transparent" />
           <p className="mt-4 text-xs sm:text-sm font-medium text-zinc-200 drop-shadow">
             {loading ? `Loading ${activeQualityLabel} stream...` : 'Buffering...'}
           </p>
+          {slowBuffering && (
+            <div className="pointer-events-auto mt-4 flex flex-wrap items-center justify-center gap-2">
+              <button
+                onClick={(e) => {
+                  e.stopPropagation();
+                  handleRetryStream();
+                }}
+                className="flex items-center gap-1.5 rounded-xl bg-white/95 px-3.5 py-2 text-xs font-bold text-obsidian shadow-lg hover:bg-white"
+              >
+                <RefreshCw className="h-3.5 w-3.5" />
+                Reconnect
+              </button>
+              {quality !== '720p' && (
+                <button
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    handleQualityChange('720p');
+                  }}
+                  className="rounded-xl bg-violet-600 px-3.5 py-2 text-xs font-bold text-white shadow-lg hover:bg-violet-500"
+                >
+                  Switch to 720p
+                </button>
+              )}
+              {quality === '720p' && (
+                <button
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    handleQualityChange('480p');
+                  }}
+                  className="rounded-xl bg-violet-600 px-3.5 py-2 text-xs font-bold text-white shadow-lg hover:bg-violet-500"
+                >
+                  Switch to 480p
+                </button>
+              )}
+            </div>
+          )}
         </div>
       )}
 
@@ -1030,9 +1097,9 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
         />
       )}
 
-      {/* Bottom Controls */}
+      {/* Bottom Controls (z-40 sits ABOVE the z-30 mobile menu backdrop so bottom sheets are 100% clickable!) */}
       <div
-        className={`absolute bottom-0 left-0 right-0 z-20 bg-gradient-to-t from-black/95 via-black/75 to-transparent px-3 pb-[max(0.75rem,env(safe-area-inset-bottom))] pt-10 sm:px-6 sm:pb-6 sm:pt-12 transition-opacity duration-300 ${
+        className={`absolute bottom-0 left-0 right-0 z-40 bg-gradient-to-t from-black/95 via-black/75 to-transparent px-3 pb-[max(0.75rem,env(safe-area-inset-bottom))] pt-10 sm:px-6 sm:pb-6 sm:pt-12 transition-opacity duration-300 ${
           showControls ? 'opacity-100' : 'opacity-0 pointer-events-none'
         }`}
       >
