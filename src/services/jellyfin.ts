@@ -601,56 +601,142 @@ export async function getPlaybackInfo(
 }
 
 /**
- * Builds a dedicated, Chromecast-safe HLS stream URL with its own PlaySessionId
- * so the paused phone session never interferes with the TV's Jellyfin transcode.
+ * Requests a dedicated, server-authorized PlaybackInfo + TranscodingUrl specifically for Chromecast
+ * so the TV gets its own real PlaySessionId (never conflicting with the paused phone session)
+ * and a smooth Chromecast-friendly bitrate cap (8 Mbps default).
  */
-export function buildCastStreamUrl(
+export async function getCastPlaybackInfo(
   session: AuthSession,
   item: MediaItem,
-  playback: PlaybackInfo,
   quality: QualityPreset,
   options: PlaybackOptions = {}
-): { streamUrl: string; isHls: boolean } {
+): Promise<{ streamUrl: string; isHls: boolean; playSessionId: string; mediaSourceId: string }> {
   if (session.isDemo) {
-    return { streamUrl: playback.streamUrl, isHls: playback.isHls };
+    const url = item.demoStreamUrl || 'https://test-streams.mux.dev/x36xhzz/x36xhzz.m3u8';
+    return {
+      streamUrl: url,
+      isHls: url.endsWith('.m3u8'),
+      playSessionId: `demo-cast-${Date.now()}`,
+      mediaSourceId: item.id,
+    };
   }
 
   const preset = QUALITY_OPTIONS.find((q) => q.id === quality) || QUALITY_OPTIONS[0];
-  // Cap Cast default bitrate at 8 Mbps (smooth 1080p on Chromecast without 30s Wi-Fi/transcode stalls)
-  const videoBitrate = preset.videoBitrate ?? 8_000_000;
-  const maxWidth = preset.maxWidth ?? 1920;
+  const maxBitrate = preset.videoBitrate ?? 8_000_000;
+  const needsBurnIn = options.burnInSubtitleIndex !== undefined && options.burnInSubtitleIndex !== null;
+  const hasExplicitAudio = options.audioStreamIndex !== undefined && options.audioStreamIndex !== null;
 
-  const params = new URLSearchParams({
-    MediaSourceId: playback.mediaSourceId,
-    PlaySessionId: `cast-${crypto.randomUUID()}`,
+  const body: Record<string, unknown> = {
+    DeviceProfile: {
+      MaxStreamingBitrate: maxBitrate,
+      DirectPlayProfiles:
+        quality !== 'auto' || needsBurnIn || hasExplicitAudio
+          ? []
+          : [
+              {
+                Container: 'mp4,m4v,webm',
+                Type: 'Video',
+                VideoCodec: 'h264,vp9',
+                AudioCodec: 'aac,mp3,opus',
+              },
+            ],
+      TranscodingProfiles: [
+        {
+          Container: 'ts',
+          Type: 'Video',
+          VideoCodec: 'h264',
+          AudioCodec: 'aac',
+          Protocol: 'hls',
+          Context: 'Streaming',
+          MaxAudioChannels: '2',
+          SegmentLength: 6,
+          MinSegments: 2,
+          BreakOnNonKeyFrames: true,
+        },
+      ],
+      SubtitleProfiles: [
+        { Format: 'vtt', Method: 'External' },
+        { Format: 'srt', Method: 'External' },
+        { Format: 'pgssub', Method: 'Encode' },
+        { Format: 'dvdsub', Method: 'Encode' },
+      ],
+    },
+    SubtitleStreamIndex: needsBurnIn ? options.burnInSubtitleIndex : -1,
+  };
+
+  if (hasExplicitAudio) {
+    body.AudioStreamIndex = options.audioStreamIndex;
+  }
+
+  const res = await fetch(
+    `${session.serverUrl}/Items/${item.id}/PlaybackInfo?UserId=${session.userId}`,
+    {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `MediaBrowser Client="QualiadeptCast", Device="Chromecast", DeviceId="${getDeviceId()}-cast", Version="1.0.0", Token="${session.accessToken}"`,
+      },
+      body: JSON.stringify(body),
+    }
+  );
+
+  if (!res.ok) throw new Error(`Cast playback info failed (HTTP ${res.status})`);
+  const data = await res.json();
+  const source = data.MediaSources?.[0];
+  if (!source) throw new Error('No playable media source found for Cast.');
+
+  const playSessionId: string = data.PlaySessionId || crypto.randomUUID();
+  const mediaSourceId: string = source.Id;
+  const token = encodeURIComponent(session.accessToken);
+
+  const canDirectPlay =
+    quality === 'auto' &&
+    !needsBurnIn &&
+    !hasExplicitAudio &&
+    source.SupportsDirectPlay &&
+    ['mp4', 'm4v', 'webm'].includes((source.Container || '').toLowerCase());
+
+  if (canDirectPlay) {
+    return {
+      streamUrl: `${session.serverUrl}/Videos/${item.id}/stream?static=true&mediaSourceId=${mediaSourceId}&api_key=${token}`,
+      isHls: false,
+      playSessionId,
+      mediaSourceId,
+    };
+  }
+
+  if (source.TranscodingUrl) {
+    return {
+      streamUrl: `${session.serverUrl}${source.TranscodingUrl}`,
+      isHls: true,
+      playSessionId,
+      mediaSourceId,
+    };
+  }
+
+  const fallbackParams = new URLSearchParams({
+    MediaSourceId: mediaSourceId,
+    PlaySessionId: playSessionId,
     VideoCodec: 'h264',
     AudioCodec: 'aac',
     AudioBitrate: '192000',
-    TranscodingMaxAudioChannels: '2',
-    VideoBitrate: String(videoBitrate),
-    MaxStreamingBitrate: String(videoBitrate),
-    MaxWidth: String(maxWidth),
-    SegmentLength: '6',
+    MaxAudioChannels: '2',
+    VideoBitrate: String(maxBitrate),
+    MaxStreamingBitrate: String(maxBitrate),
     DeviceId: `${getDeviceId()}-cast`,
     api_key: session.accessToken,
   });
-
-  const audioIdx =
-    options.audioStreamIndex !== undefined && options.audioStreamIndex !== null
-      ? options.audioStreamIndex
-      : playback.defaultAudioIndex;
-  if (audioIdx !== null) {
-    params.set('AudioStreamIndex', String(audioIdx));
-  }
-
-  if (options.burnInSubtitleIndex !== undefined && options.burnInSubtitleIndex !== null) {
-    params.set('SubtitleStreamIndex', String(options.burnInSubtitleIndex));
-    params.set('SubtitleMethod', 'Encode');
+  if (hasExplicitAudio) fallbackParams.set('AudioStreamIndex', String(options.audioStreamIndex));
+  if (needsBurnIn) {
+    fallbackParams.set('SubtitleStreamIndex', String(options.burnInSubtitleIndex));
+    fallbackParams.set('SubtitleMethod', 'Encode');
   }
 
   return {
-    streamUrl: `${session.serverUrl}/Videos/${item.id}/master.m3u8?${params.toString()}`,
+    streamUrl: `${session.serverUrl}/Videos/${item.id}/master.m3u8?${fallbackParams.toString()}`,
     isHls: true,
+    playSessionId,
+    mediaSourceId,
   };
 }
 

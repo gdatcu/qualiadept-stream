@@ -20,8 +20,8 @@ import {
   X,
 } from 'lucide-react';
 import {
-  buildCastStreamUrl,
   fetchNextEpisode,
+  getCastPlaybackInfo,
   getPlaybackInfo,
   reportPlaybackProgress,
 } from '../services/jellyfin';
@@ -645,7 +645,7 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
           ? castStateRef.current.currentTime
           : videoRef.current?.currentTime || 0;
 
-      const castStream = buildCastStreamUrl(session, item, playback, q, {
+      const castStream = await getCastPlaybackInfo(session, item, q, {
         audioStreamIndex: aIdx,
         burnInSubtitleIndex: bIdx,
       });

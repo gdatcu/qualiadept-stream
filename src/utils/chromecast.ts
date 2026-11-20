@@ -160,14 +160,9 @@ export async function startChromecast(payload: CastMediaPayload): Promise<string
   const mediaInfo = new window.chrome.cast.media.MediaInfo(payload.streamUrl, contentType);
   mediaInfo.streamType = window.chrome.cast.media.StreamType.BUFFERED;
 
-  // Explicitly declare MPEG-TS HLS format so Chromecast Shaka receiver doesn't stall every ~30s
-  if (payload.isHls) {
-    if (window.chrome.cast.media.HlsSegmentFormat?.TS) {
-      mediaInfo.hlsSegmentFormat = window.chrome.cast.media.HlsSegmentFormat.TS;
-    }
-    if (window.chrome.cast.media.HlsVideoSegmentFormat?.MPEG2_TS) {
-      mediaInfo.hlsVideoSegmentFormat = window.chrome.cast.media.HlsVideoSegmentFormat.MPEG2_TS;
-    }
+  // Declare TS HLS segment format (do NOT set hlsVideoSegmentFormat for muxed audio+video TS streams)
+  if (payload.isHls && window.chrome.cast.media.HlsSegmentFormat?.TS) {
+    mediaInfo.hlsSegmentFormat = window.chrome.cast.media.HlsSegmentFormat.TS;
   }
 
   const metadata = new window.chrome.cast.media.GenericMediaMetadata();
