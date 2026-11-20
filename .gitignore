@@ -4,6 +4,10 @@ node_modules/
 # Build output
 dist/
 
+# Generated native projects (built automatically in GitHub Actions)
+android/
+ios/
+
 # Local env files
 .env
 .env.local
