@@ -600,6 +600,60 @@ export async function getPlaybackInfo(
   };
 }
 
+/**
+ * Builds a dedicated, Chromecast-safe HLS stream URL with its own PlaySessionId
+ * so the paused phone session never interferes with the TV's Jellyfin transcode.
+ */
+export function buildCastStreamUrl(
+  session: AuthSession,
+  item: MediaItem,
+  playback: PlaybackInfo,
+  quality: QualityPreset,
+  options: PlaybackOptions = {}
+): { streamUrl: string; isHls: boolean } {
+  if (session.isDemo) {
+    return { streamUrl: playback.streamUrl, isHls: playback.isHls };
+  }
+
+  const preset = QUALITY_OPTIONS.find((q) => q.id === quality) || QUALITY_OPTIONS[0];
+  // Cap Cast default bitrate at 8 Mbps (smooth 1080p on Chromecast without 30s Wi-Fi/transcode stalls)
+  const videoBitrate = preset.videoBitrate ?? 8_000_000;
+  const maxWidth = preset.maxWidth ?? 1920;
+
+  const params = new URLSearchParams({
+    MediaSourceId: playback.mediaSourceId,
+    PlaySessionId: `cast-${crypto.randomUUID()}`,
+    VideoCodec: 'h264',
+    AudioCodec: 'aac',
+    AudioBitrate: '192000',
+    TranscodingMaxAudioChannels: '2',
+    VideoBitrate: String(videoBitrate),
+    MaxStreamingBitrate: String(videoBitrate),
+    MaxWidth: String(maxWidth),
+    SegmentLength: '6',
+    DeviceId: `${getDeviceId()}-cast`,
+    api_key: session.accessToken,
+  });
+
+  const audioIdx =
+    options.audioStreamIndex !== undefined && options.audioStreamIndex !== null
+      ? options.audioStreamIndex
+      : playback.defaultAudioIndex;
+  if (audioIdx !== null) {
+    params.set('AudioStreamIndex', String(audioIdx));
+  }
+
+  if (options.burnInSubtitleIndex !== undefined && options.burnInSubtitleIndex !== null) {
+    params.set('SubtitleStreamIndex', String(options.burnInSubtitleIndex));
+    params.set('SubtitleMethod', 'Encode');
+  }
+
+  return {
+    streamUrl: `${session.serverUrl}/Videos/${item.id}/master.m3u8?${params.toString()}`,
+    isHls: true,
+  };
+}
+
 export async function reportPlaybackProgress(
   session: AuthSession,
   itemId: string,

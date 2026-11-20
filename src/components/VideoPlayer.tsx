@@ -20,6 +20,7 @@ import {
   X,
 } from 'lucide-react';
 import {
+  buildCastStreamUrl,
   fetchNextEpisode,
   getPlaybackInfo,
   reportPlaybackProgress,
@@ -34,11 +35,16 @@ import {
 } from '../types/media';
 import {
   initCastSdk,
+  seekChromecast,
+  setChromecastActiveSubtitle,
+  setChromecastVolume,
   showAirPlayPicker,
   startChromecast,
   stopChromecast,
   supportsAirPlay,
+  toggleChromecastMute,
   toggleChromecastPlayPause,
+  type CastState,
 } from '../utils/chromecast';
 
 interface VideoPlayerProps {
@@ -146,6 +152,18 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
   const [castAvailable, setCastAvailable] = useState(false);
   const [castDeviceName, setCastDeviceName] = useState<string | null>(null);
   const [castNotice, setCastNotice] = useState<string | null>(null);
+  const [castState, setCastState] = useState<CastState>({
+    isConnected: false,
+    deviceName: null,
+    isPaused: false,
+    isBuffering: false,
+    currentTime: 0,
+    duration: 0,
+    volumeLevel: 1,
+    isMuted: false,
+  });
+  const castStateRef = useRef<CastState>(castState);
+  castStateRef.current = castState;
 
   const bumpControls = useCallback(() => {
     setShowControls(true);
@@ -176,7 +194,14 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
   }, []);
 
   useEffect(() => {
-    return initCastSdk(setCastAvailable);
+    return initCastSdk(setCastAvailable, (nextState) => {
+      setCastState(nextState);
+      if (nextState.isConnected && nextState.deviceName) {
+        setCastDeviceName(nextState.deviceName);
+      } else if (!nextState.isConnected) {
+        setCastDeviceName(null);
+      }
+    });
   }, []);
 
   // Keep mobile screen awake while player is open (Screen Wake Lock API)
@@ -446,10 +471,23 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
     return () => window.clearTimeout(nudgeTimer);
   }, [buffering, loading, error]);
 
-  // Sync progress with Jellyfin every 10s
+  // Sync progress with Jellyfin every 10s (uses TV's live progress while casting so paused local video never conflicts)
   useEffect(() => {
     if (!playback || session.isDemo) return;
     const id = window.setInterval(() => {
+      const liveCast = castStateRef.current;
+      if (liveCast.isConnected) {
+        reportPlaybackProgress(
+          session,
+          item.id,
+          playback.mediaSourceId,
+          playback.playSessionId,
+          liveCast.currentTime,
+          liveCast.isPaused,
+          'progress'
+        );
+        return;
+      }
       const video = videoRef.current;
       if (!video) return;
       reportPlaybackProgress(
@@ -487,6 +525,11 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
   }, [nextCountdown, nextEpisode, onPlayNext]);
 
   const togglePlay = useCallback(() => {
+    if (castStateRef.current.isConnected) {
+      toggleChromecastPlayPause();
+      bumpControls();
+      return;
+    }
     const video = videoRef.current;
     if (!video) return;
     if (video.paused) {
@@ -501,12 +544,24 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
 
   const seekBy = useCallback(
     (delta: number) => {
+      if (castStateRef.current.isConnected) {
+        const target = Math.max(
+          0,
+          Math.min(
+            castStateRef.current.duration || duration || Infinity,
+            castStateRef.current.currentTime + delta
+          )
+        );
+        seekChromecast(target);
+        bumpControls();
+        return;
+      }
       const video = videoRef.current;
       if (!video) return;
       video.currentTime = Math.max(0, Math.min(video.duration || 0, video.currentTime + delta));
       bumpControls();
     },
-    [bumpControls]
+    [bumpControls, duration]
   );
 
   const toggleFullscreen = useCallback(() => {
@@ -569,15 +624,71 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
     return () => window.removeEventListener('keydown', onKey);
   }, [onClose, nextEpisode, onPlayNext, showSubMenu, showQualityMenu, togglePlay, seekBy, toggleFullscreen]);
 
+  const loadOnChromecast = useCallback(
+    async (overrides?: {
+      quality?: QualityPreset;
+      audioIndex?: number | null;
+      burnInIndex?: number | null;
+      textSubIndex?: number | null;
+      startTime?: number;
+    }) => {
+      if (!playback) return null;
+      const q = overrides?.quality ?? quality;
+      const aIdx = overrides?.audioIndex !== undefined ? overrides.audioIndex : selectedAudioIndex;
+      const bIdx = overrides?.burnInIndex !== undefined ? overrides.burnInIndex : burnInSubIndex;
+      const tIdx =
+        overrides?.textSubIndex !== undefined ? overrides.textSubIndex : activeTextSubIndex;
+      const startTime =
+        overrides?.startTime !== undefined
+          ? overrides.startTime
+          : castStateRef.current.isConnected
+          ? castStateRef.current.currentTime
+          : videoRef.current?.currentTime || 0;
+
+      const castStream = buildCastStreamUrl(session, item, playback, q, {
+        audioStreamIndex: aIdx,
+        burnInSubtitleIndex: bIdx,
+      });
+
+      const castTextSubs = (playback.subtitles || [])
+        .filter((s) => s.isText && s.url)
+        .map((s) => ({
+          id: s.index,
+          label: s.label,
+          language: s.language,
+          url: s.url!,
+        }));
+
+      return startChromecast({
+        streamUrl: castStream.streamUrl,
+        isHls: castStream.isHls,
+        title: item.name,
+        subtitle: item.seriesName
+          ? `${item.seriesName} · S${item.seasonNumber}E${item.episodeNumber}`
+          : undefined,
+        posterUrl: item.backdropUrl || item.posterUrl,
+        currentTime: startTime,
+        subtitles: castTextSubs,
+        activeSubtitleId: bIdx !== null ? null : tIdx,
+      });
+    },
+    [playback, quality, selectedAudioIndex, burnInSubIndex, activeTextSubIndex, session, item]
+  );
+
   const handleQualityChange = (nextQuality: QualityPreset) => {
     if (nextQuality === quality) {
       setShowQualityMenu(false);
       return;
     }
-    resumeOverrideRef.current = videoRef.current?.currentTime || 0;
     setQuality(nextQuality);
     setShowQualityMenu(false);
     bumpControls();
+
+    if (castStateRef.current.isConnected) {
+      loadOnChromecast({ quality: nextQuality }).catch(() => {});
+      return;
+    }
+    resumeOverrideRef.current = videoRef.current?.currentTime || 0;
   };
 
   const handleRetryStream = () => {
@@ -590,10 +701,14 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
   const handleCastClick = async () => {
     bumpControls();
 
-    if (castDeviceName) {
+    if (castDeviceName || castStateRef.current.isConnected) {
+      const tvPos = castStateRef.current.currentTime;
       stopChromecast();
       setCastDeviceName(null);
-      videoRef.current?.play().catch(() => {});
+      if (videoRef.current) {
+        if (tvPos > 1) videoRef.current.currentTime = tvPos;
+        videoRef.current.play().catch(() => {});
+      }
       return;
     }
 
@@ -606,16 +721,7 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
 
     try {
       setCastNotice(null);
-      const device = await startChromecast({
-        streamUrl: playback.streamUrl,
-        isHls: playback.isHls,
-        title: item.name,
-        subtitle: item.seriesName
-          ? `${item.seriesName} · S${item.seasonNumber}E${item.episodeNumber}`
-          : undefined,
-        posterUrl: item.backdropUrl || item.posterUrl,
-        currentTime: videoRef.current?.currentTime || 0,
-      });
+      const device = await loadOnChromecast();
       if (device) {
         videoRef.current?.pause();
         setCastDeviceName(device);
@@ -659,18 +765,30 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
       setShowSubMenu(false);
       return;
     }
-    resumeOverrideRef.current = videoRef.current?.currentTime || 0;
     setSelectedAudioIndex(audioIndex);
     setShowSubMenu(false);
     bumpControls();
+
+    if (castStateRef.current.isConnected) {
+      loadOnChromecast({ audioIndex }).catch(() => {});
+      return;
+    }
+    resumeOverrideRef.current = videoRef.current?.currentTime || 0;
   };
 
   const handleSubtitleSelect = (sub: SubtitleTrack | null) => {
+    const isCasting = castStateRef.current.isConnected;
     if (!sub) {
       setActiveTextSubIndex(null);
       if (burnInSubIndex !== null) {
-        resumeOverrideRef.current = videoRef.current?.currentTime || 0;
         setBurnInSubIndex(null);
+        if (isCasting) {
+          loadOnChromecast({ burnInIndex: null, textSubIndex: null }).catch(() => {});
+        } else {
+          resumeOverrideRef.current = videoRef.current?.currentTime || 0;
+        }
+      } else if (isCasting) {
+        setChromecastActiveSubtitle(null);
       }
       setShowSubMenu(false);
       bumpControls();
@@ -680,14 +798,24 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
     if (sub.isText && sub.url) {
       setActiveTextSubIndex(sub.index);
       if (burnInSubIndex !== null) {
-        resumeOverrideRef.current = videoRef.current?.currentTime || 0;
         setBurnInSubIndex(null);
+        if (isCasting) {
+          loadOnChromecast({ burnInIndex: null, textSubIndex: sub.index }).catch(() => {});
+        } else {
+          resumeOverrideRef.current = videoRef.current?.currentTime || 0;
+        }
+      } else if (isCasting) {
+        setChromecastActiveSubtitle(sub.index);
       }
     } else {
       setActiveTextSubIndex(null);
       if (burnInSubIndex !== sub.index) {
-        resumeOverrideRef.current = videoRef.current?.currentTime || 0;
         setBurnInSubIndex(sub.index);
+        if (isCasting) {
+          loadOnChromecast({ burnInIndex: sub.index, textSubIndex: null }).catch(() => {});
+        } else {
+          resumeOverrideRef.current = videoRef.current?.currentTime || 0;
+        }
       }
     }
     setShowSubMenu(false);
@@ -751,6 +879,13 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
       bumpControls();
     }
   };
+
+  const isCasting = Boolean(castDeviceName || castState.isConnected);
+  const displayCurrentTime = isCasting ? castState.currentTime : currentTime;
+  const displayDuration = isCasting ? castState.duration || duration : duration;
+  const displayPlaying = isCasting ? !castState.isPaused : playing;
+  const displayMuted = isCasting ? castState.isMuted : muted;
+  const displayVolume = isCasting ? castState.volumeLevel : volume;
 
   const activeSubtitleIndex = burnInSubIndex ?? activeTextSubIndex;
   const hasAudioOrSubs =
@@ -999,35 +1134,63 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
 
       {/* Casting to TV Overlay */}
       {castDeviceName && (
-        <div className="absolute inset-0 z-20 flex flex-col items-center justify-center bg-obsidian/95 p-6 text-center backdrop-blur-md">
+        <div className="absolute inset-0 z-20 flex flex-col items-center justify-center bg-obsidian/95 px-6 pb-28 pt-16 text-center backdrop-blur-md">
           {(item.backdropUrl || item.posterUrl) && (
             <img
               src={item.backdropUrl || item.posterUrl}
               alt={item.name}
-              className="mb-6 h-40 w-64 sm:h-44 sm:w-72 rounded-2xl object-cover shadow-2xl border border-white/15"
+              className="mb-5 h-36 w-60 sm:h-44 sm:w-72 rounded-2xl object-cover shadow-2xl border border-white/15"
             />
           )}
           <div className="flex items-center gap-2 text-violet-400">
-            <Cast className="h-5 w-5" />
+            <Cast className="h-4 w-4 sm:h-5 sm:w-5" />
             <span className="text-xs font-bold uppercase tracking-wider">
-              Casting to {castDeviceName}
+              {castState.isBuffering
+                ? `Buffering on ${castDeviceName}...`
+                : castState.isPaused
+                ? `Paused on ${castDeviceName}`
+                : `Casting to ${castDeviceName}`}
             </span>
           </div>
           <h3 className="mt-2 text-xl sm:text-2xl font-black text-white">{item.name}</h3>
-          <div className="mt-6 flex flex-wrap items-center justify-center gap-3">
+          <div className="mt-5 flex flex-wrap items-center justify-center gap-3">
+            <button
+              onClick={() => seekBy(-10)}
+              aria-label="Back 10 seconds on TV"
+              className="flex h-11 w-11 items-center justify-center rounded-full border border-white/20 bg-white/10 text-white hover:bg-white/20"
+            >
+              <RotateCcw className="h-5 w-5" />
+            </button>
             <button
               onClick={() => toggleChromecastPlayPause()}
-              className="rounded-xl bg-white px-5 py-2.5 text-sm font-bold text-obsidian hover:bg-zinc-200"
+              className="flex items-center gap-2 rounded-xl bg-white px-5 py-2.5 text-sm font-bold text-obsidian hover:bg-zinc-200"
             >
-              Play / Pause on TV
+              {displayPlaying ? (
+                <>
+                  <Pause className="h-4 w-4 fill-obsidian" />
+                  Pause on TV
+                </>
+              ) : (
+                <>
+                  <Play className="h-4 w-4 fill-obsidian" />
+                  Play on TV
+                </>
+              )}
             </button>
             <button
-              onClick={handleCastClick}
-              className="rounded-xl border border-white/20 bg-white/10 px-5 py-2.5 text-sm font-semibold text-white hover:bg-white/20"
+              onClick={() => seekBy(10)}
+              aria-label="Forward 10 seconds on TV"
+              className="flex h-11 w-11 items-center justify-center rounded-full border border-white/20 bg-white/10 text-white hover:bg-white/20"
             >
-              Stop Casting
+              <RotateCw className="h-5 w-5" />
             </button>
           </div>
+          <button
+            onClick={handleCastClick}
+            className="mt-4 rounded-xl border border-white/20 bg-white/10 px-5 py-2 text-xs font-semibold text-zinc-200 hover:bg-white/20"
+          >
+            Stop Casting
+          </button>
         </div>
       )}
 
@@ -1119,29 +1282,33 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
       {/* Bottom Controls (z-40 sits ABOVE the z-30 mobile menu backdrop so bottom sheets are 100% clickable!) */}
       <div
         className={`absolute bottom-0 left-0 right-0 z-40 bg-gradient-to-t from-black/95 via-black/75 to-transparent px-3 pb-[max(0.75rem,env(safe-area-inset-bottom))] pt-10 sm:px-6 sm:pb-6 sm:pt-12 transition-opacity duration-300 ${
-          showControls ? 'opacity-100' : 'opacity-0 pointer-events-none'
+          showControls || isCasting ? 'opacity-100' : 'opacity-0 pointer-events-none'
         }`}
       >
         {/* Timeline Scrubber */}
         <div className="mb-2.5 sm:mb-3 flex items-center gap-2 sm:gap-3">
           <span className="w-10 sm:w-12 text-[11px] sm:text-xs font-mono text-zinc-300 tabular-nums">
-            {formatTime(currentTime)}
+            {formatTime(displayCurrentTime)}
           </span>
           <input
             type="range"
             min={0}
-            max={duration || 100}
-            value={currentTime}
+            max={displayDuration || 100}
+            value={displayCurrentTime}
             onChange={(e) => {
               const val = Number(e.target.value);
-              if (videoRef.current) videoRef.current.currentTime = val;
-              setCurrentTime(val);
+              if (isCasting) {
+                seekChromecast(val);
+              } else {
+                if (videoRef.current) videoRef.current.currentTime = val;
+                setCurrentTime(val);
+              }
               bumpControls();
             }}
             className="h-1.5 flex-1 cursor-pointer appearance-none rounded-full bg-white/25 accent-violet-500"
           />
           <span className="w-10 sm:w-12 text-right text-[11px] sm:text-xs font-mono text-zinc-300 tabular-nums">
-            {formatTime(duration)}
+            {formatTime(displayDuration)}
           </span>
         </div>
 
@@ -1150,10 +1317,10 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
           <div className="flex items-center gap-1 sm:gap-2.5 min-w-0">
             <button
               onClick={togglePlay}
-              aria-label={playing ? 'Pause' : 'Play'}
+              aria-label={displayPlaying ? 'Pause' : 'Play'}
               className="flex h-9 w-9 sm:h-10 sm:w-10 flex-shrink-0 items-center justify-center rounded-full bg-white text-obsidian transition hover:scale-105 focus:outline-none focus:ring-4 focus:ring-violet-400"
             >
-              {playing ? (
+              {displayPlaying ? (
                 <Pause className="h-4 w-4 sm:h-5 sm:w-5 fill-obsidian" />
               ) : (
                 <Play className="h-4 w-4 sm:h-5 sm:w-5 fill-obsidian ml-0.5" />
@@ -1191,15 +1358,20 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
             <div className="flex items-center gap-1.5">
               <button
                 onClick={() => {
+                  if (isCasting) {
+                    toggleChromecastMute();
+                    bumpControls();
+                    return;
+                  }
                   if (!videoRef.current) return;
                   videoRef.current.muted = !muted;
                   setMuted(!muted);
                   bumpControls();
                 }}
-                aria-label={muted ? 'Unmute' : 'Mute'}
+                aria-label={displayMuted ? 'Unmute' : 'Mute'}
                 className="rounded-lg p-1.5 sm:p-2 text-zinc-200 transition hover:bg-white/10 focus:outline-none focus:ring-2 focus:ring-violet-400"
               >
-                {muted || volume === 0 ? (
+                {displayMuted || displayVolume === 0 ? (
                   <VolumeX className="h-4 w-4 sm:h-5 sm:w-5" />
                 ) : (
                   <Volume2 className="h-4 w-4 sm:h-5 sm:w-5" />
@@ -1210,9 +1382,14 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
                 min={0}
                 max={1}
                 step={0.05}
-                value={muted ? 0 : volume}
+                value={displayMuted ? 0 : displayVolume}
                 onChange={(e) => {
                   const v = Number(e.target.value);
+                  if (isCasting) {
+                    setChromecastVolume(v);
+                    bumpControls();
+                    return;
+                  }
                   setVolume(v);
                   setMuted(v === 0);
                   if (videoRef.current) {
