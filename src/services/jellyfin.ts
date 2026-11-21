@@ -418,7 +418,7 @@ export async function fetchLibraryItems(session: AuthSession): Promise<MediaItem
     SortBy: 'DateCreated,SortName',
     SortOrder: 'Descending',
     Fields: 'Overview,Genres,RunTimeTicks,OfficialRating,CommunityRating,UserData',
-    Limit: '250',
+    Limit: '1000',
   });
 
   const res = await fetchWithRetry(

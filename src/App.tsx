@@ -1,4 +1,6 @@
 import React, { Suspense, lazy, useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { Star } from 'lucide-react';
+import { BrowseFilterBar, type SortOption } from './components/BrowseFilterBar';
 import { DetailModal } from './components/DetailModal';
 import { HeroBanner } from './components/HeroBanner';
 import { LoginScreen } from './components/LoginScreen';
@@ -72,6 +74,8 @@ export const App: React.FC = () => {
 
   const [activeTab, setActiveTab] = useState<NavTab>('home');
   const [searchQuery, setSearchQuery] = useState('');
+  const [selectedGenre, setSelectedGenre] = useState<string | null>(null);
+  const [sortBy, setSortBy] = useState<SortOption>('recent');
   const [selectedItem, setSelectedItem] = useState<MediaItem | null>(null);
   const [playingItem, setPlayingItem] = useState<MediaItem | null>(null);
   const [showExitToast, setShowExitToast] = useState(false);
@@ -97,6 +101,8 @@ export const App: React.FC = () => {
   activeTabRef.current = activeTab;
   const searchQueryRef = useRef(searchQuery);
   searchQueryRef.current = searchQuery;
+  const selectedGenreRef = useRef(selectedGenre);
+  selectedGenreRef.current = selectedGenre;
   const selectedItemRef = useRef(selectedItem);
   selectedItemRef.current = selectedItem;
   const playingItemRef = useRef(playingItem);
@@ -300,6 +306,11 @@ export const App: React.FC = () => {
         armBackGuard();
         return;
       }
+      if (selectedGenreRef.current) {
+        setSelectedGenre(null);
+        armBackGuard();
+        return;
+      }
       if (activeTabRef.current !== 'home') {
         setActiveTab('home');
         armBackGuard();
@@ -396,20 +407,64 @@ export const App: React.FC = () => {
     }
   };
 
-  const filteredItems = useMemo(() => {
-    const q = searchQuery.trim().toLowerCase();
+  const handleSearchChange = (q: string) => {
+    setSearchQuery(q);
+    if (q.trim() && (activeTab === 'downloads' || activeTab === 'family')) {
+      setActiveTab('home');
+    }
+  };
+
+  const handleTabChange = (tab: NavTab) => {
+    setActiveTab(tab);
+    setSelectedGenre(null);
+  };
+
+  const tabBaseItems = useMemo(() => {
     return items.filter((item) => {
       if (activeTab === 'movies' && item.type !== 'Movie') return false;
       if (activeTab === 'series' && item.type !== 'Series') return false;
       if (activeTab === 'mylist' && !item.isFavorite) return false;
+      return true;
+    });
+  }, [items, activeTab]);
+
+  const availableGenres = useMemo(() => {
+    const counts = new Map<string, number>();
+    for (const item of tabBaseItems) {
+      for (const genre of item.genres) {
+        if (!genre || genre === 'Featured') continue;
+        counts.set(genre, (counts.get(genre) || 0) + 1);
+      }
+    }
+    return [...counts.entries()]
+      .map(([name, count]) => ({ name, count }))
+      .sort((a, b) => b.count - a.count || a.name.localeCompare(b.name));
+  }, [tabBaseItems]);
+
+  const filteredItems = useMemo(() => {
+    const q = searchQuery.trim().toLowerCase();
+    const matched = tabBaseItems.filter((item) => {
+      if (selectedGenre && !item.genres.includes(selectedGenre)) return false;
       if (!q) return true;
       return (
         item.name.toLowerCase().includes(q) ||
         item.overview.toLowerCase().includes(q) ||
+        String(item.year || '').includes(q) ||
         item.genres.some((g) => g.toLowerCase().includes(q))
       );
     });
-  }, [items, activeTab, searchQuery]);
+
+    if (sortBy === 'rating') {
+      return [...matched].sort((a, b) => (b.rating ?? 0) - (a.rating ?? 0));
+    }
+    if (sortBy === 'year') {
+      return [...matched].sort((a, b) => (b.year ?? 0) - (a.year ?? 0));
+    }
+    if (sortBy === 'az') {
+      return [...matched].sort((a, b) => a.name.localeCompare(b.name));
+    }
+    return matched;
+  }, [tabBaseItems, selectedGenre, searchQuery, sortBy]);
 
   const genreRows = useMemo(() => {
     const map = new Map<string, MediaItem[]>();
@@ -427,9 +482,13 @@ export const App: React.FC = () => {
   }, [filteredItems]);
 
   const heroItem = useMemo(() => {
-    if (filteredItems.length === 0) return null;
-    return filteredItems[0];
-  }, [filteredItems]);
+    if (tabBaseItems.length === 0) return null;
+    return tabBaseItems[0];
+  }, [tabBaseItems]);
+
+  const isFilteredGridMode = Boolean(
+    searchQuery.trim() || selectedGenre || sortBy !== 'recent'
+  );
 
   if (!session || switchingProfile) {
     return (
@@ -452,9 +511,9 @@ export const App: React.FC = () => {
       <Navbar
         session={session}
         activeTab={activeTab}
-        onTabChange={setActiveTab}
+        onTabChange={handleTabChange}
         searchQuery={searchQuery}
-        onSearchChange={setSearchQuery}
+        onSearchChange={handleSearchChange}
         onSwitchProfile={() => setSwitchingProfile(true)}
         onCheckUpdates={handleManualUpdateCheck}
         onSignOut={handleSignOut}
@@ -497,40 +556,9 @@ export const App: React.FC = () => {
             )}
           </div>
         </div>
-      ) : searchQuery.trim() ? (
-        <main className="mx-auto max-w-[1600px] px-4 pt-[calc(7.5rem+var(--app-safe-top))] sm:px-8">
-          <h2 className="mb-6 text-xl font-bold">
-            Search results for &ldquo;{searchQuery}&rdquo; ({filteredItems.length})
-          </h2>
-          {filteredItems.length === 0 ? (
-            <p className="text-sm text-zinc-400">No matching titles found.</p>
-          ) : (
-            <div className="grid grid-cols-2 gap-4 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-6">
-              {filteredItems.map((item) => (
-                <div
-                  key={item.id}
-                  onClick={() => setSelectedItem(item)}
-                  className="cursor-pointer overflow-hidden rounded-xl border border-white/10 bg-surface transition hover:scale-[1.03] hover:border-violet-400/50"
-                >
-                  <div className="aspect-[2/3] bg-surface-elevated">
-                    <img
-                      src={item.posterUrl}
-                      alt={item.name}
-                      className="h-full w-full object-cover"
-                    />
-                  </div>
-                  <div className="p-2.5">
-                    <p className="truncate text-sm font-semibold">{item.name}</p>
-                    <p className="text-xs text-zinc-400">{item.year}</p>
-                  </div>
-                </div>
-              ))}
-            </div>
-          )}
-        </main>
       ) : (
         <main>
-          {heroItem && activeTab === 'home' && (
+          {heroItem && activeTab === 'home' && !isFilteredGridMode && (
             <HeroBanner
               item={heroItem}
               onPlay={(item) =>
@@ -543,12 +571,12 @@ export const App: React.FC = () => {
 
           <div
             className={`mx-auto max-w-[1600px] ${
-              heroItem && activeTab === 'home'
+              heroItem && activeTab === 'home' && !isFilteredGridMode
                 ? '-mt-10 relative z-10'
                 : 'pt-[calc(7.5rem+var(--app-safe-top))]'
             }`}
           >
-            {activeTab === 'home' && resumeItems.length > 0 && (
+            {activeTab === 'home' && !isFilteredGridMode && resumeItems.length > 0 && (
               <MediaRow
                 title="Continue Watching"
                 items={resumeItems}
@@ -558,24 +586,111 @@ export const App: React.FC = () => {
               />
             )}
 
+            {/* Prominent Search + Genre Filter Pills + Sort Bar */}
+            <BrowseFilterBar
+              searchQuery={searchQuery}
+              onSearchChange={handleSearchChange}
+              genres={availableGenres}
+              selectedGenre={selectedGenre}
+              onSelectGenre={setSelectedGenre}
+              sortBy={sortBy}
+              onSortChange={setSortBy}
+              totalMatching={filteredItems.length}
+            />
+
             {filteredItems.length === 0 ? (
               <div className="px-8 py-16 text-center text-zinc-400">
-                {activeTab === 'mylist'
-                  ? 'Your list is empty. Click the + button on any movie or series to save it here.'
-                  : 'No titles in this library yet.'}
+                {searchQuery.trim() || selectedGenre ? (
+                  <div>
+                    <p className="text-sm text-zinc-300">
+                      No titles found
+                      {selectedGenre ? ` in ${selectedGenre}` : ''}
+                      {searchQuery.trim() ? ` matching "${searchQuery.trim()}"` : ''}.
+                    </p>
+                    <button
+                      onClick={() => {
+                        setSearchQuery('');
+                        setSelectedGenre(null);
+                      }}
+                      className="mt-4 rounded-xl bg-violet-600 px-4 py-2 text-xs font-semibold text-white hover:bg-violet-500"
+                    >
+                      Clear Filters
+                    </button>
+                  </div>
+                ) : activeTab === 'mylist' ? (
+                  'Your list is empty. Click the + button on any movie or series to save it here.'
+                ) : (
+                  'No titles in this library yet.'
+                )}
               </div>
-            ) : (
-              <>
-                <MediaRow
-                  title={
-                    activeTab === 'movies'
+            ) : isFilteredGridMode || activeTab === 'movies' || activeTab === 'series' || activeTab === 'mylist' ? (
+              <section className="px-4 sm:px-8">
+                <div className="mb-4 flex items-center justify-between">
+                  <h2 className="text-lg sm:text-xl font-bold text-white">
+                    {searchQuery.trim()
+                      ? `Results for "${searchQuery.trim()}"${selectedGenre ? ` · ${selectedGenre}` : ''}`
+                      : selectedGenre
+                      ? `${selectedGenre}${
+                          activeTab === 'movies'
+                            ? ' Movies'
+                            : activeTab === 'series'
+                            ? ' TV Series'
+                            : ''
+                        }`
+                      : activeTab === 'movies'
                       ? 'All Movies'
                       : activeTab === 'series'
                       ? 'All TV Series'
                       : activeTab === 'mylist'
                       ? 'My List'
-                      : 'Recently Added'
-                  }
+                      : 'All Titles'}{' '}
+                    <span className="text-sm font-medium text-zinc-400">
+                      ({filteredItems.length})
+                    </span>
+                  </h2>
+                </div>
+
+                <div className="grid grid-cols-2 gap-3.5 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-6">
+                  {filteredItems.map((item) => (
+                    <div
+                      key={item.id}
+                      onClick={() => setSelectedItem(item)}
+                      className="group cursor-pointer overflow-hidden rounded-xl border border-white/10 bg-surface transition hover:scale-[1.03] hover:border-violet-400/50"
+                    >
+                      <div className="relative aspect-[2/3] bg-surface-elevated">
+                        {item.posterUrl && (
+                          <img
+                            src={item.posterUrl}
+                            alt={item.name}
+                            loading="lazy"
+                            className="h-full w-full object-cover"
+                          />
+                        )}
+                        <div className="absolute top-2 left-2 rounded-md bg-black/70 px-1.5 py-0.5 text-[10px] font-bold uppercase tracking-wider text-zinc-200 backdrop-blur-sm">
+                          {item.type === 'Series' ? 'Series' : 'Movie'}
+                        </div>
+                        {item.rating && (
+                          <div className="absolute top-2 right-2 flex items-center gap-0.5 rounded-md bg-black/70 px-1.5 py-0.5 text-[10px] font-bold text-amber-300 backdrop-blur-sm">
+                            <Star className="h-2.5 w-2.5 fill-amber-300" />
+                            {item.rating}
+                          </div>
+                        )}
+                      </div>
+                      <div className="p-2.5">
+                        <p className="truncate text-sm font-semibold text-white">{item.name}</p>
+                        <p className="truncate text-xs text-zinc-400">
+                          {item.year ? `${item.year}` : ''}
+                          {item.genres[0] ? `${item.year ? ' · ' : ''}${item.genres[0]}` : ''}
+                        </p>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </section>
+            ) : (
+              <>
+                <MediaRow
+                  title="Recently Added"
                   items={filteredItems}
                   onSelect={setSelectedItem}
                   onPlay={(item) =>
@@ -585,20 +700,19 @@ export const App: React.FC = () => {
                   }
                 />
 
-                {activeTab === 'home' &&
-                  genreRows.map(([genre, list]) => (
-                    <MediaRow
-                      key={genre}
-                      title={genre}
-                      items={list}
-                      onSelect={setSelectedItem}
-                      onPlay={(item) =>
-                        item.type === 'Series'
-                          ? setSelectedItem(item)
-                          : setPlayingItem(item)
-                      }
-                    />
-                  ))}
+                {genreRows.map(([genre, list]) => (
+                  <MediaRow
+                    key={genre}
+                    title={genre}
+                    items={list}
+                    onSelect={setSelectedItem}
+                    onPlay={(item) =>
+                      item.type === 'Series'
+                        ? setSelectedItem(item)
+                        : setPlayingItem(item)
+                    }
+                  />
+                ))}
               </>
             )}
           </div>
