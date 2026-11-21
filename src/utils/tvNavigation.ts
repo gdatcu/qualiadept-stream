@@ -1,4 +1,34 @@
-// Spatial D-pad navigation for Samsung Smart TV (Tizen) & Android TV remotes
+// Spatial D-pad & Samsung SolarCell Remote navigation for Samsung Smart TV (Tizen) & Android TV
+
+interface TizenGlobal {
+  tvinputdevice?: {
+    registerKeyBatch?: (keys: string[]) => void;
+    registerKey?: (key: string) => void;
+  };
+  application?: {
+    getCurrentApplication?: () => { exit?: () => void };
+  };
+}
+
+function getTizen(): TizenGlobal | null {
+  try {
+    return (window as unknown as { tizen?: TizenGlobal }).tizen ?? null;
+  } catch {
+    return null;
+  }
+}
+
+export function isTizenTv(): boolean {
+  return Boolean(getTizen()) || /Tizen/i.test(navigator.userAgent);
+}
+
+export function exitTizenApp(): void {
+  try {
+    getTizen()?.application?.getCurrentApplication?.()?.exit?.();
+  } catch {
+    // Ignore outside Tizen
+  }
+}
 
 const FOCUSABLE_SELECTOR = [
   'button:not([disabled])',
@@ -16,9 +46,11 @@ function isVisible(el: HTMLElement): boolean {
 function moveFocus(direction: 'ArrowUp' | 'ArrowDown' | 'ArrowLeft' | 'ArrowRight') {
   const active = document.activeElement as HTMLElement | null;
 
-  // If inside a modal or player overlay, restrict search to that overlay
+  // Prefer open player menus (Subtitles / Audio / Quality), then modals, then full document
+  const playerMenu = document.querySelector('[data-tv-player-menu="true"]') as HTMLElement | null;
   const activeOverlay = active?.closest('[data-tv-scope="modal"]') as HTMLElement | null;
   const root: ParentNode =
+    playerMenu ||
     activeOverlay ||
     (document.querySelector('[data-tv-scope="modal"]') as HTMLElement | null) ||
     document;
@@ -29,7 +61,7 @@ function moveFocus(direction: 'ArrowUp' | 'ArrowDown' | 'ArrowLeft' | 'ArrowRigh
 
   if (candidates.length === 0) return;
 
-  if (!active || !isVisible(active) || active === document.body) {
+  if (!active || !isVisible(active) || active === document.body || (playerMenu && !playerMenu.contains(active))) {
     candidates[0].focus();
     candidates[0].scrollIntoView({ behavior: 'smooth', block: 'nearest', inline: 'nearest' });
     return;
@@ -74,6 +106,28 @@ function moveFocus(direction: 'ArrowUp' | 'ArrowDown' | 'ArrowLeft' | 'ArrowRigh
 }
 
 export function initTvNavigation(): () => void {
+  // Register Samsung Tizen Smart TV remote media keys (required on Tizen 4–8 including 2024 Q60D)
+  const tizen = getTizen();
+  if (tizen?.tvinputdevice) {
+    const mediaKeys = [
+      'MediaPlayPause',
+      'MediaPlay',
+      'MediaPause',
+      'MediaStop',
+      'MediaFastForward',
+      'MediaRewind',
+    ];
+    try {
+      if (tizen.tvinputdevice.registerKeyBatch) {
+        tizen.tvinputdevice.registerKeyBatch(mediaKeys);
+      } else if (tizen.tvinputdevice.registerKey) {
+        for (const k of mediaKeys) tizen.tvinputdevice.registerKey(k);
+      }
+    } catch {
+      // Ignore if running in browser emulator
+    }
+  }
+
   const onKeyDown = (e: KeyboardEvent) => {
     // Samsung Tizen Remote Back button (keyCode 10009) -> dispatch Escape
     if (e.keyCode === 10009 || e.key === 'XF86Back' || e.key === 'GoBack') {
@@ -82,9 +136,13 @@ export function initTvNavigation(): () => void {
       return;
     }
 
-    // Do not hijack arrow keys inside the fullscreen video player or text/range inputs
+    // Inside the fullscreen video player, allow D-pad navigation when Quality/Subtitle menu is open;
+    // otherwise let VideoPlayer handle Left/Right (±10s seek) and media keys directly.
+    const inPlayer = Boolean(document.querySelector('[data-tv-player="true"]'));
+    const inPlayerMenu = Boolean(document.querySelector('[data-tv-player-menu="true"]'));
+    if (inPlayer && !inPlayerMenu) return;
+
     const target = e.target as HTMLElement | null;
-    if (document.querySelector('[data-tv-player="true"]')) return;
     if (
       target &&
       (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA' || target.tagName === 'SELECT')

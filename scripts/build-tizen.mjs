@@ -13,13 +13,36 @@ if (!fs.existsSync(distDir)) {
 
 fs.rmSync(outDir, { recursive: true, force: true });
 fs.cpSync(distDir, outDir, { recursive: true });
-fs.copyFileSync(path.join(tizenDir, 'config.xml'), path.join(outDir, 'config.xml'));
+
+// Stamp build version into config.xml if VITE_APP_VERSION is provided
+let configXml = fs.readFileSync(path.join(tizenDir, 'config.xml'), 'utf-8');
+const version = process.env.VITE_APP_VERSION;
+if (version && /^\d+\.\d+\.\d+$/.test(version)) {
+  configXml = configXml.replace(/version="[^"]+"/, `version="${version}"`);
+}
+fs.writeFileSync(path.join(outDir, 'config.xml'), configXml, 'utf-8');
 fs.copyFileSync(path.join(tizenDir, 'icon.png'), path.join(outDir, 'icon.png'));
 
-// Remove web-only files not needed inside the Tizen .wgt package
-for (const file of ['.htaccess', 'sw.js', 'registerSW.js']) {
-  const p = path.join(outDir, file);
-  if (fs.existsSync(p)) fs.rmSync(p, { force: true });
+// Remove web-only PWA files not used inside the Tizen .wgt package
+for (const file of fs.readdirSync(outDir)) {
+  if (
+    file === '.htaccess' ||
+    file === 'sw.js' ||
+    file === 'registerSW.js' ||
+    file === 'manifest.webmanifest' ||
+    file.startsWith('workbox-')
+  ) {
+    fs.rmSync(path.join(outDir, file), { force: true });
+  }
+}
+
+// Strip PWA service worker script & manifest links from index.html so Tizen logs zero 404s
+const indexHtmlPath = path.join(outDir, 'index.html');
+if (fs.existsSync(indexHtmlPath)) {
+  let html = fs.readFileSync(indexHtmlPath, 'utf-8');
+  html = html.replace(/<script[^>]*registerSW\.js[^>]*><\/script>\s*/g, '');
+  html = html.replace(/<link[^>]*manifest\.webmanifest[^>]*>\s*/g, '');
+  fs.writeFileSync(indexHtmlPath, html, 'utf-8');
 }
 
 console.log('Samsung Tizen TV app folder ready at: tizen-dist/');

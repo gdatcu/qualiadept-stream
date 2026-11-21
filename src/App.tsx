@@ -31,7 +31,7 @@ import {
   subscribeOfflineDownloads,
 } from './services/offlineDownloads';
 import type { AuthSession, MediaItem } from './types/media';
-import { initTvNavigation } from './utils/tvNavigation';
+import { exitTizenApp, initTvNavigation, isTizenTv } from './utils/tvNavigation';
 
 const DownloadsView = lazy(() =>
   import('./components/DownloadsView').then((m) => ({ default: m.DownloadsView }))
@@ -280,40 +280,40 @@ export const App: React.FC = () => {
     window.addEventListener('pointerdown', onUserGesture, { passive: true });
     window.addEventListener('keydown', onUserGesture, { passive: true });
 
-    const onPopState = () => {
+    const handleBackStep = (fromTizenKey = false) => {
       if (availableUpdateRef.current) {
         setAvailableUpdate(null);
-        armBackGuard();
+        if (!fromTizenKey) armBackGuard();
         return;
       }
       if (switchingProfileRef.current) {
         setSwitchingProfile(false);
-        armBackGuard();
+        if (!fromTizenKey) armBackGuard();
         return;
       }
       if (playingItemRef.current) {
         closePlayer();
-        armBackGuard();
+        if (!fromTizenKey) armBackGuard();
         return;
       }
       if (selectedItemRef.current) {
         setSelectedItem(null);
-        armBackGuard();
+        if (!fromTizenKey) armBackGuard();
         return;
       }
       if (searchQueryRef.current.trim()) {
         setSearchQuery('');
-        armBackGuard();
+        if (!fromTizenKey) armBackGuard();
         return;
       }
       if (selectedGenreRef.current) {
         setSelectedGenre(null);
-        armBackGuard();
+        if (!fromTizenKey) armBackGuard();
         return;
       }
       if (activeTabRef.current !== 'home') {
         setActiveTab('home');
-        armBackGuard();
+        if (!fromTizenKey) armBackGuard();
         return;
       }
 
@@ -321,11 +321,14 @@ export const App: React.FC = () => {
       if (now < exitConfirmUntilRef.current) {
         // Confirmed second Back press within 2.2s: allow exiting cleanly
         setShowExitToast(false);
+        if (fromTizenKey && isTizenTv()) {
+          exitTizenApp();
+        }
         return;
       }
 
       exitConfirmUntilRef.current = now + 2200;
-      armBackGuard();
+      if (!fromTizenKey) armBackGuard();
       setShowExitToast(true);
       if (exitToastTimerRef.current) window.clearTimeout(exitToastTimerRef.current);
       exitToastTimerRef.current = window.setTimeout(() => {
@@ -333,11 +336,21 @@ export const App: React.FC = () => {
       }, 2200);
     };
 
+    const onPopState = () => handleBackStep(false);
+    const onEscapeKey = (e: KeyboardEvent) => {
+      if (e.key !== 'Escape') return;
+      // VideoPlayer handles its own Escape/Back while mounted
+      if (playingItemRef.current) return;
+      handleBackStep(true);
+    };
+
     window.addEventListener('popstate', onPopState);
+    window.addEventListener('keydown', onEscapeKey);
     return () => {
       window.removeEventListener('pointerdown', onUserGesture);
       window.removeEventListener('keydown', onUserGesture);
       window.removeEventListener('popstate', onPopState);
+      window.removeEventListener('keydown', onEscapeKey);
       if (exitToastTimerRef.current) window.clearTimeout(exitToastTimerRef.current);
       if (statusToastTimerRef.current) window.clearTimeout(statusToastTimerRef.current);
     };
@@ -654,8 +667,16 @@ export const App: React.FC = () => {
                   {filteredItems.map((item) => (
                     <div
                       key={item.id}
+                      role="button"
+                      tabIndex={0}
                       onClick={() => setSelectedItem(item)}
-                      className="group cursor-pointer overflow-hidden rounded-xl border border-white/10 bg-surface transition hover:scale-[1.03] hover:border-violet-400/50"
+                      onKeyDown={(e) => {
+                        if (e.key === 'Enter' || e.key === ' ') {
+                          e.preventDefault();
+                          setSelectedItem(item);
+                        }
+                      }}
+                      className="group cursor-pointer overflow-hidden rounded-xl border border-white/10 bg-surface transition hover:scale-[1.03] hover:border-violet-400/50 focus:outline-none focus:scale-[1.04] focus:border-violet-400 focus:ring-4 focus:ring-violet-400"
                     >
                       <div className="relative aspect-[2/3] bg-surface-elevated">
                         {item.posterUrl && (

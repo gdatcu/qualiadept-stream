@@ -168,26 +168,33 @@ jobs:
           sys.exit("ERROR: Could not parse Qualiadept certificate DER!")
           PY
 
-      - name: Prepare versioned APK file
+      - name: Prepare versioned APK & Samsung Tizen TV package
+        env:
+          VITE_APP_VERSION: "1.0.${{ github.run_number }}"
         run: |
           mkdir -p release-assets
           cp android/app/build/outputs/apk/debug/app-debug.apk "release-assets/Qualiadept-Stream-v1.0.${{ github.run_number }}.apk"
+          node scripts/build-tizen.mjs
+          (cd tizen-dist && zip -qr "../release-assets/Qualiadept-Stream-Samsung-TV-Tizen-v1.0.${{ github.run_number }}.zip" .)
 
-      - name: Upload APK Artifact
+      - name: Upload APK & Tizen TV Artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: Qualiadept-Stream-Android-APK
-          path: release-assets/Qualiadept-Stream-v1.0.${{ github.run_number }}.apk
+          name: Qualiadept-Stream-Releases
+          path: release-assets/*
           retention-days: 30
 
       - name: Publish GitHub Release
         uses: softprops/action-gh-release@v2
         with:
           tag_name: v1.0.${{ github.run_number }}
-          name: "Qualiadept Stream v1.0.${{ github.run_number }} (Android)"
+          name: "Qualiadept Stream v1.0.${{ github.run_number }} (Android + Samsung TV)"
           body: |
-            Versiune nouă pentru aplicația mobilă **Qualiadept Stream** (1-la-1 cu `https://stream.qualiadept.eu`).
-            Descarcă fișierul `.apk` de mai jos direct pe telefonul Android pentru instalare.
-          files: release-assets/Qualiadept-Stream-v1.0.${{ github.run_number }}.apk
+            Versiune nouă pentru **Qualiadept Stream** (1-la-1 cu `https://stream.qualiadept.eu`).
+            - **Android:** descarcă `.apk` și apasă **Update** direct pe telefon.
+            - **Samsung Smart TV (Tizen / QLED 43Q60D):** descarcă pachetul `.zip` pentru Tizen Studio (vezi `tizen/INSTALL_SAMSUNG_43Q60D.md`).
+          files: |
+            release-assets/Qualiadept-Stream-v1.0.${{ github.run_number }}.apk
+            release-assets/Qualiadept-Stream-Samsung-TV-Tizen-v1.0.${{ github.run_number }}.zip
           draft: false
           prerelease: false

@@ -1136,6 +1136,9 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
         e.preventDefault();
         video.pause();
         setPlaying(false);
+      } else if (e.key === 'MediaStop' || e.keyCode === 413) {
+        e.preventDefault();
+        onClose();
       } else if (e.key === 'ArrowRight' || e.key === 'MediaFastForward' || e.keyCode === 417) {
         e.preventDefault();
         seekBy(10);
@@ -2084,7 +2087,10 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
                 )}
               </button>
               {showQualityMenu && (
-                <div className="fixed inset-x-3 bottom-20 z-40 max-h-[68dvh] overflow-y-auto rounded-2xl border border-white/15 bg-surface/95 p-2 shadow-2xl backdrop-blur-xl sm:absolute sm:inset-x-auto sm:bottom-14 sm:right-0 sm:w-72 sm:rounded-xl">
+                <div
+                  data-tv-player-menu="true"
+                  className="fixed inset-x-3 bottom-20 z-40 max-h-[68dvh] overflow-y-auto rounded-2xl border border-white/15 bg-surface/95 p-2 shadow-2xl backdrop-blur-xl sm:absolute sm:inset-x-auto sm:bottom-14 sm:right-0 sm:w-72 sm:rounded-xl"
+                >
                   <div className="flex items-center justify-between px-3 py-1.5">
                     <span className="text-[11px] font-bold uppercase tracking-wider text-zinc-400">
                       Stream Quality
@@ -2181,6 +2187,7 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
                 </button>
                 {showSubMenu && (
                   <div
+                    data-tv-player-menu="true"
                     className={`fixed inset-x-3 bottom-20 z-40 max-h-[68dvh] overflow-y-auto rounded-2xl border border-white/15 bg-surface/95 p-3 shadow-2xl backdrop-blur-xl sm:absolute sm:inset-x-auto sm:bottom-14 sm:right-0 sm:max-h-[70vh] sm:rounded-xl sm:p-2.5 ${
                       playback.audioTracks.length > 0 && playback.subtitles.length > 0
                         ? 'grid grid-cols-1 gap-3 sm:w-[32rem] sm:max-w-[calc(100vw-2rem)] sm:grid-cols-2'
