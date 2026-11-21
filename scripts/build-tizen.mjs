@@ -14,11 +14,11 @@ if (!fs.existsSync(distDir)) {
 fs.rmSync(outDir, { recursive: true, force: true });
 fs.cpSync(distDir, outDir, { recursive: true });
 
-// Stamp build version into config.xml if VITE_APP_VERSION is provided
+// Stamp build version into <widget ... version="..."> (NOT <?xml version="1.0"?>!)
 let configXml = fs.readFileSync(path.join(tizenDir, 'config.xml'), 'utf-8');
 const version = process.env.VITE_APP_VERSION;
 if (version && /^\d+\.\d+\.\d+$/.test(version)) {
-  configXml = configXml.replace(/version="[^"]+"/, `version="${version}"`);
+  configXml = configXml.replace(/(<widget[\s\S]*?\bversion=")[^"]+(")/, `$1${version}$2`);
 }
 fs.writeFileSync(path.join(outDir, 'config.xml'), configXml, 'utf-8');
 fs.copyFileSync(path.join(tizenDir, 'icon.png'), path.join(outDir, 'icon.png'));
