@@ -54,6 +54,7 @@ import {
   getNetworkLabel,
   getNextLowerQuality,
   getRecommendedQuality,
+  isAndroidWebViewPlatform,
   qualityRank,
   recordMeasuredThroughput,
   recordStableCeiling,
@@ -136,6 +137,8 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
   const [networkLabel, setNetworkLabel] = useState(() => getNetworkLabel());
   const [offlineQualityLabel, setOfflineQualityLabel] = useState<string | null>(null);
   const [forceHls, setForceHls] = useState(false);
+  const [useNativeHls, setUseNativeHls] = useState(false);
+  const [streamStatus, setStreamStatus] = useState<string | null>(null);
   const [adaptiveNotice, setAdaptiveNotice] = useState<string | null>(null);
   const [playback, setPlayback] = useState<PlaybackInfo | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -302,6 +305,8 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
   qualityRef.current = quality;
   const playbackRef = useRef<PlaybackInfo | null>(playback);
   playbackRef.current = playback;
+  const streamStatusRef = useRef<string | null>(streamStatus);
+  streamStatusRef.current = streamStatus;
 
   const flashAdaptiveNotice = useCallback((message: string) => {
     setAdaptiveNotice(message);
@@ -325,7 +330,13 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
 
       lastAdaptTsRef.current = now;
       stallTimestampsRef.current = [];
-      resumeOverrideRef.current = videoRef.current?.currentTime || 0;
+      const cur = videoRef.current?.currentTime || 0;
+      resumeOverrideRef.current =
+        cur > 1
+          ? cur
+          : !hasStartedPlayingRef.current && item.resumePositionSeconds && item.resumePositionSeconds > 5
+          ? item.resumePositionSeconds
+          : 0;
       if (playbackRef.current && !playbackRef.current.isHls) {
         setForceHls(true);
       }
@@ -335,7 +346,7 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
       flashAdaptiveNotice(`Lowered to ${label} · ${reason}`);
       return true;
     },
-    [flashAdaptiveNotice]
+    [flashAdaptiveNotice, item.resumePositionSeconds]
   );
 
   // Records a mid-playback stall (ignoring manual seek transitions within 3s).
@@ -382,6 +393,8 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
     setActiveTextSubIndex(null);
     setBurnInSubIndex(null);
     setForceHls(false);
+    setUseNativeHls(false);
+    setStreamStatus('Preparing stream...');
     resumeOverrideRef.current = null;
     stallTimestampsRef.current = [];
     hasStartedPlayingRef.current = false;
@@ -410,6 +423,8 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
     setLoading(true);
     setBuffering(false);
     setSlowBuffering(false);
+    setUseNativeHls(false);
+    setStreamStatus('Connecting to server...');
     setError(null);
     hasStartedPlayingRef.current = false;
     streamStartedAtRef.current = 0;
@@ -431,6 +446,7 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
         if (offline) {
           offlineRevokeRef.current = offline.revoke;
           setOfflineQualityLabel(offline.qualityLabel);
+          setStreamStatus('Opening offline download...');
           setPlayback(offline.playback);
           return;
         }
@@ -442,7 +458,10 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
         forceHls,
         bypassCache: retryNonce > 0,
       });
-      if (active) setPlayback(info);
+      if (active) {
+        setStreamStatus(info.isHls ? 'Loading playlist...' : 'Opening direct stream...');
+        setPlayback(info);
+      }
     };
 
     tryLoad().catch((err) => {
@@ -459,16 +478,25 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
     };
   }, [session, item, quality, selectedAudioIndex, burnInSubIndex, forceHls, retryNonce]);
 
-  // Attach HLS.js (instant Netflix-style startup, deep mobile buffer cushion & real-time ABR) or native video source
+  // Attach HLS.js (with Android WebView inline demuxer + automatic Native HLS fallback) or native video source
   useEffect(() => {
     if (!playback || !videoRef.current) return;
     const video = videoRef.current;
     let hls: Hls | null = null;
     let manifestParsed = false;
+    let startReported = false;
     let networkRetries = 0;
     let mediaRetries = 0;
+    let initialFragFailures = 0;
     let retryTimer: number | null = null;
     let cleanupNative: (() => void) | null = null;
+
+    const isOfflineFile = playback.mediaSourceId.startsWith('offline-');
+    const canNativeHls = Boolean(
+      video.canPlayType('application/vnd.apple.mpegurl') ||
+        video.canPlayType('application/x-mpegURL')
+    );
+    const shouldUseHlsJs = playback.isHls && Hls.isSupported() && !useNativeHls;
 
     const initialSeekTarget =
       resumeOverrideRef.current !== null
@@ -478,10 +506,21 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
         : 0;
     resumeOverrideRef.current = null;
 
-    const startPlayback = () => {
-      if (!playback.isHls && initialSeekTarget > 0) {
-        video.currentTime = initialSeekTarget;
-      }
+    const reportStartOnce = () => {
+      if (startReported || isOfflineFile) return;
+      startReported = true;
+      reportPlaybackProgress(
+        session,
+        item.id,
+        playback.mediaSourceId,
+        playback.playSessionId,
+        initialSeekTarget || video.currentTime,
+        false,
+        'start'
+      );
+    };
+
+    const triggerPlay = () => {
       video
         .play()
         .then(() => {
@@ -491,29 +530,17 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
           setPlaying(false);
           setShowControls(true);
         });
-      setLoading(false);
-      setBuffering(false);
-      setSlowBuffering(false);
-      if (!playback.mediaSourceId.startsWith('offline-')) {
-        reportPlaybackProgress(
-          session,
-          item.id,
-          playback.mediaSourceId,
-          playback.playSessionId,
-          initialSeekTarget || video.currentTime,
-          false,
-          'start'
-        );
-      }
+      reportStartOnce();
     };
 
-    if (playback.isHls && Hls.isSupported()) {
+    if (shouldUseHlsJs) {
+      const isWebView = isAndroidWebViewPlatform();
       video.removeAttribute('src');
       hls = new Hls({
-        enableWorker: true,
+        // Disable blob Web Worker on Capacitor / Android WebView where blob workers can silently stall MSE transmuxing
+        enableWorker: !isWebView,
         lowLatencyMode: false,
-        // Prefetch segment 0 immediately for fast startup while using battle-tested XhrLoader
-        startFragPrefetch: true,
+        startFragPrefetch: false,
         startPosition: initialSeekTarget > 0 ? initialSeekTarget : -1,
         // Deep forward buffer cushion absorbs 5G dips and tower handoffs with zero pauses
         maxBufferLength: 60,
@@ -534,11 +561,34 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
       });
       hlsRef.current = hls;
 
+      hls.on(Hls.Events.MEDIA_ATTACHED, () => {
+        setStreamStatus('Loading playlist...');
+        hls?.loadSource(playback.streamUrl);
+      });
+
       hls.on(Hls.Events.MANIFEST_PARSED, () => {
         manifestParsed = true;
-        startPlayback();
+        // Keep loading=true until FRAG_BUFFERED / onCanPlay fires so startup watchdog stays active
+        // and we never flash fake "Buffering..." at 0:00 before segment 0 arrives.
+        setStreamStatus('Buffering first video segment...');
+        triggerPlay();
       });
+
+      hls.on(Hls.Events.FRAG_LOADING, (_ev, data) => {
+        if (!hasStartedPlayingRef.current) {
+          const sn = data.frag?.sn;
+          setStreamStatus(
+            typeof sn === 'number'
+              ? `Downloading segment #${sn}...`
+              : 'Downloading first video segment...'
+          );
+        }
+      });
+
       hls.on(Hls.Events.FRAG_LOADED, (_ev, data) => {
+        if (!hasStartedPlayingRef.current) {
+          setStreamStatus('Decoding video...');
+        }
         const stats = data.frag?.stats;
         if (!stats) return;
         const bytes = stats.loaded || 0;
@@ -551,22 +601,62 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
           recordMeasuredThroughput(sampleMbps);
         }
       });
+
       hls.on(Hls.Events.FRAG_BUFFERED, () => {
         networkRetries = 0;
+        initialFragFailures = 0;
         setLoading(false);
         setBuffering(false);
         setSlowBuffering(false);
+        setStreamStatus(null);
+        if (video.paused && !hasStartedPlayingRef.current) {
+          triggerPlay();
+        }
       });
+
       hls.on(Hls.Events.ERROR, (_ev, data) => {
+        const httpCode = data.response?.code;
+
         if (!data.fatal) {
           if (data.details === Hls.ErrorDetails.BUFFER_STALLED_ERROR) {
-            setBuffering(true);
-            recordStall('stabilizing playback');
+            if (hasStartedPlayingRef.current) {
+              setBuffering(true);
+              recordStall('stabilizing playback');
+            }
+            return;
+          }
+
+          // Surface non-fatal MSE/worker/segment issues instead of spinning silently at 0:00
+          if (
+            data.details === Hls.ErrorDetails.INTERNAL_EXCEPTION ||
+            data.details === Hls.ErrorDetails.BUFFER_ADD_CODEC_ERROR ||
+            data.details === Hls.ErrorDetails.BUFFER_APPEND_ERROR ||
+            data.details === Hls.ErrorDetails.FRAG_PARSING_ERROR
+          ) {
+            if (canNativeHls && !hasStartedPlayingRef.current) {
+              setStreamStatus('Switching to native Android player...');
+              setUseNativeHls(true);
+              return;
+            }
+            setStreamStatus(`Recovering decoder (${data.details})...`);
+            return;
+          }
+
+          if (
+            data.details === Hls.ErrorDetails.FRAG_LOAD_ERROR ||
+            data.details === Hls.ErrorDetails.FRAG_LOAD_TIMEOUT
+          ) {
+            initialFragFailures += 1;
+            const detail = httpCode ? `HTTP ${httpCode}` : 'timeout';
+            setStreamStatus(`Segment retry #${initialFragFailures} (${detail})...`);
+            if (!hasStartedPlayingRef.current && initialFragFailures >= 2 && canNativeHls) {
+              setStreamStatus('Switching to native Android player...');
+              setUseNativeHls(true);
+            }
           }
           return;
         }
 
-        const httpCode = data.response?.code;
         const isClientHttpError =
           typeof httpCode === 'number' &&
           httpCode >= 400 &&
@@ -578,7 +668,10 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
         // Crucial: MANIFEST_* failures MUST call loadSource() — startLoad() silently stops hls.js!
         if (data.type === Hls.ErrorTypes.NETWORK_ERROR && !isClientHttpError && networkRetries < 3) {
           networkRetries += 1;
-          setBuffering(true);
+          setStreamStatus(
+            `Reconnecting (${data.details}${httpCode ? ` · HTTP ${httpCode}` : ''})...`
+          );
+          if (hasStartedPlayingRef.current) setBuffering(true);
           const isManifestErr =
             !manifestParsed ||
             data.details === Hls.ErrorDetails.MANIFEST_LOAD_ERROR ||
@@ -597,8 +690,16 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
 
         if (data.type === Hls.ErrorTypes.MEDIA_ERROR && mediaRetries < 2) {
           mediaRetries += 1;
-          setBuffering(true);
+          setStreamStatus('Recovering media buffer...');
+          if (hasStartedPlayingRef.current) setBuffering(true);
           hls?.recoverMediaError();
+          return;
+        }
+
+        // Last-resort automatic fallback to Android/Safari native hardware HLS before showing error screen
+        if (canNativeHls && !useNativeHls) {
+          setStreamStatus('Switching to native Android player...');
+          setUseNativeHls(true);
           return;
         }
 
@@ -612,28 +713,64 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
       });
 
       hls.attachMedia(video);
-      hls.loadSource(playback.streamUrl);
     } else {
       hlsRef.current = null;
-      const isOfflineFile = playback.mediaSourceId.startsWith('offline-');
+      if (playback.isHls && useNativeHls) {
+        setStreamStatus('Loading via native Android player...');
+      }
+
+      const onMetadata = () => {
+        if (initialSeekTarget > 0) {
+          try {
+            video.currentTime = initialSeekTarget;
+          } catch {
+            // Some native HLS streams seek after canplay
+          }
+        }
+        setStreamStatus(isOfflineFile ? 'Starting offline video...' : 'Buffering first frame...');
+        triggerPlay();
+      };
+
+      const onCanPlayReady = () => {
+        if (initialSeekTarget > 0 && video.currentTime < 1 && !hasStartedPlayingRef.current) {
+          try {
+            video.currentTime = initialSeekTarget;
+          } catch {
+            // Ignore seek failure
+          }
+        }
+        setLoading(false);
+        setBuffering(false);
+        setSlowBuffering(false);
+        setStreamStatus(null);
+      };
+
       const onNativeError = () => {
-        // If online Direct Play fails, try stepping down to adaptive HLS automatically first
+        if (!isOfflineFile && !playback.isHls) {
+          // Direct Play failed to decode — immediately switch to adaptive HLS
+          setForceHls(true);
+          flashAdaptiveNotice('Direct Play unsupported · switching to adaptive stream');
+          return;
+        }
         if (!isOfflineFile && stepDownQuality('switching to adaptive stream')) return;
         setError(
           isOfflineFile
             ? 'Could not decode this offline download in the browser. Delete and re-download in Mobile HD (MP4).'
-            : 'Could not load this stream directly. Tap Retry or try another quality.'
+            : 'Could not load this stream. Tap Retry or try another quality.'
         );
         setLoading(false);
         setBuffering(false);
         setSlowBuffering(false);
         setShowControls(true);
       };
+
       video.src = playback.streamUrl;
-      video.addEventListener('loadedmetadata', startPlayback, { once: true });
+      video.addEventListener('loadedmetadata', onMetadata, { once: true });
+      video.addEventListener('canplay', onCanPlayReady, { once: true });
       video.addEventListener('error', onNativeError, { once: true });
       cleanupNative = () => {
-        video.removeEventListener('loadedmetadata', startPlayback);
+        video.removeEventListener('loadedmetadata', onMetadata);
+        video.removeEventListener('canplay', onCanPlayReady);
         video.removeEventListener('error', onNativeError);
         video.pause();
         video.removeAttribute('src');
@@ -644,7 +781,7 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
     return () => {
       if (retryTimer) window.clearTimeout(retryTimer);
       hlsRef.current = null;
-      if (playback && !playback.mediaSourceId.startsWith('offline-')) {
+      if (playback && !isOfflineFile) {
         reportPlaybackProgress(
           session,
           item.id,
@@ -658,7 +795,7 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
       if (hls) hls.destroy();
       if (cleanupNative) cleanupNative();
     };
-  }, [playback, session, item, stepDownQuality, recordStall]);
+  }, [playback, useNativeHls, session, item, stepDownQuality, recordStall, flashAdaptiveNotice]);
 
   // Continuous 1-second Stability-First Monitor (works on Wi-Fi, 5G, 4G, 3G):
   // Lowers quality automatically until playback runs with zero periodic buffering.
@@ -732,8 +869,9 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
   }, [playback, loading, error, stepDownQuality]);
 
   // Loading & stall recovery watchdog:
+  // - If Direct Play stalls at 0:00 for 7s, automatically fall back to adaptive HLS
+  // - If HLS.js stalls at 0:00 for 12s on Android WebView, automatically switch to Native Android HLS (or step down quality)
   // - If buffering lasts > 3.5s mid-playback, automatically lower quality first before user waits
-  // - If already at lowest tier (360p) or manually locked, show Reconnect / quality pills & safely nudge MSE
   // - Hard timeout after 35s of initial loading so the player can never spin forever
   useEffect(() => {
     if ((!loading && !buffering) || error) {
@@ -745,6 +883,26 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
       () => {
         const video = videoRef.current;
         const hls = hlsRef.current;
+        const currentPlayback = playbackRef.current;
+        const isOffline = Boolean(currentPlayback?.mediaSourceId.startsWith('offline-'));
+
+        // Startup stall on Direct Play (e.g. unsupported HEVC/audio in Android WebView) -> force HLS immediately
+        if (
+          loading &&
+          !hasStartedPlayingRef.current &&
+          currentPlayback &&
+          !currentPlayback.isHls &&
+          !isOffline
+        ) {
+          resumeOverrideRef.current =
+            item.resumePositionSeconds && item.resumePositionSeconds > 5
+              ? item.resumePositionSeconds
+              : 0;
+          setForceHls(true);
+          flashAdaptiveNotice('Direct Play stalled · switching to adaptive stream');
+          return;
+        }
+
         if (
           !loading &&
           video &&
@@ -764,13 +922,42 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
           video.play().catch(() => {});
         }
       },
-      loading ? 8000 : 3500
+      loading ? 7000 : 3500
     );
+
+    // Secondary startup recovery at 12s: if HLS.js still has 0 buffered seconds, try Android Native HLS or lower quality
+    const startupFallbackTimer =
+      loading && playback && !playback.mediaSourceId.startsWith('offline-')
+        ? window.setTimeout(() => {
+            const video = videoRef.current;
+            if (!video || hasStartedPlayingRef.current) return;
+            const buffered = getBufferAheadSeconds(video);
+            if (buffered >= 1) return;
+
+            const canNative = Boolean(
+              video.canPlayType('application/vnd.apple.mpegurl') ||
+                video.canPlayType('application/x-mpegURL')
+            );
+            if (playback.isHls && !useNativeHls && canNative) {
+              resumeOverrideRef.current =
+                item.resumePositionSeconds && item.resumePositionSeconds > 5
+                  ? item.resumePositionSeconds
+                  : 0;
+              setStreamStatus('Switching to native Android player...');
+              setUseNativeHls(true);
+              flashAdaptiveNotice('Switched to native Android video engine');
+              return;
+            }
+            if (!manualQualityLockedRef.current) {
+              stepDownQuality('faster mobile startup');
+            }
+          }, 12_000)
+        : null;
 
     const hardLoadTimeout = loading
       ? window.setTimeout(() => {
           setError(
-            'Stream is taking too long to start on this connection. Tap Retry or switch quality.'
+            `Stream is taking too long to start (${streamStatusRef.current || 'waiting for first video chunk'}). Tap Retry or switch quality.`
           );
           setLoading(false);
           setBuffering(false);
@@ -781,9 +968,19 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
 
     return () => {
       window.clearTimeout(nudgeTimer);
+      if (startupFallbackTimer) window.clearTimeout(startupFallbackTimer);
       if (hardLoadTimeout) window.clearTimeout(hardLoadTimeout);
     };
-  }, [buffering, loading, error, stepDownQuality]);
+  }, [
+    buffering,
+    loading,
+    error,
+    playback,
+    useNativeHls,
+    item,
+    stepDownQuality,
+    flashAdaptiveNotice,
+  ]);
 
   // Sync progress with Jellyfin every 10s (uses TV's live progress while casting so paused local video never conflicts)
   useEffect(() => {
@@ -1002,10 +1199,20 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
     [playback, quality, selectedAudioIndex, burnInSubIndex, activeTextSubIndex, session, item]
   );
 
+  const getResumePositionForReload = () => {
+    const cur = videoRef.current?.currentTime || currentTime || 0;
+    if (cur > 1) return cur;
+    if (!hasStartedPlayingRef.current && item.resumePositionSeconds && item.resumePositionSeconds > 5) {
+      return item.resumePositionSeconds;
+    }
+    return 0;
+  };
+
   const handleQualityChange = (nextQuality: QualityPreset) => {
     manualQualityLockedRef.current = true;
     setAutoStability(false);
     setForceHls(false);
+    setUseNativeHls(false);
     if (nextQuality === quality) {
       setShowQualityMenu(false);
       return;
@@ -1018,27 +1225,29 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
       loadOnChromecast({ quality: nextQuality }).catch(() => {});
       return;
     }
-    resumeOverrideRef.current = videoRef.current?.currentTime || 0;
+    resumeOverrideRef.current = getResumePositionForReload();
   };
 
   const handleEnableAutoStability = () => {
     manualQualityLockedRef.current = false;
     setAutoStability(true);
     setForceHls(false);
+    setUseNativeHls(false);
     clearStableCeiling();
     setShowQualityMenu(false);
     bumpControls();
 
     const recommended = getRecommendedQuality();
     if (recommended !== quality) {
-      resumeOverrideRef.current = videoRef.current?.currentTime || 0;
+      resumeOverrideRef.current = getResumePositionForReload();
       setQuality(recommended);
     }
     flashAdaptiveNotice('Auto Stability enabled · prioritizing smooth playback');
   };
 
   const handleRetryStream = () => {
-    resumeOverrideRef.current = videoRef.current?.currentTime || currentTime || 0;
+    resumeOverrideRef.current = getResumePositionForReload();
+    setUseNativeHls(false);
     setError(null);
     setRetryNonce((n) => n + 1);
     bumpControls();
@@ -1280,15 +1489,22 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
           setPlaying(true);
           setBuffering(false);
           setLoading(false);
+          setStreamStatus(null);
         }}
         onSeeking={() => {
           lastSeekTsRef.current = Date.now();
         }}
         onWaiting={() => {
-          setBuffering(true);
-          recordStall('stabilizing playback');
+          if (hasStartedPlayingRef.current) {
+            setBuffering(true);
+            recordStall('stabilizing playback');
+          }
         }}
-        onCanPlay={() => setBuffering(false)}
+        onCanPlay={() => {
+          setLoading(false);
+          setBuffering(false);
+          setStreamStatus(null);
+        }}
         onPause={() => {
           setPlaying(false);
           setShowControls(true);
@@ -1358,10 +1574,14 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
         </div>
       )}
 
-      {/* Netflix-style Left Brightness Vertical Slider */}
+      {/* Netflix-style Left Brightness Vertical Slider (hidden during loading/buffering so portrait action buttons never overlap) */}
       <div
         className={`absolute left-3 top-1/2 z-20 -translate-y-1/2 flex flex-col items-center gap-2 rounded-2xl border border-white/15 bg-black/55 px-2 py-3 backdrop-blur-md transition-opacity duration-300 sm:left-5 ${
-          showControls && !error && !castDeviceName && !showSubMenu && !showQualityMenu
+          (isDraggingBrightness || (showControls && !loading && !buffering)) &&
+          !error &&
+          !castDeviceName &&
+          !showSubMenu &&
+          !showQualityMenu
             ? 'opacity-100'
             : 'opacity-0 pointer-events-none'
         }`}
@@ -1422,13 +1642,18 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
 
       {/* Loading / Buffering Spinner */}
       {(loading || buffering) && !error && (
-        <div className="pointer-events-none absolute inset-0 z-10 flex flex-col items-center justify-center bg-black/40 px-4">
+        <div className="pointer-events-none absolute inset-0 z-10 flex flex-col items-center justify-center bg-black/40 px-6 text-center">
           <div className="h-12 w-12 animate-spin rounded-full border-4 border-violet-500 border-t-transparent" />
           <p className="mt-4 text-xs sm:text-sm font-medium text-zinc-200 drop-shadow">
             {loading ? `Loading ${activeQualityLabel} stream...` : 'Buffering...'}
           </p>
+          {streamStatus && (
+            <p className="mt-1 max-w-xs text-[11px] text-zinc-400 drop-shadow">
+              {streamStatus}
+            </p>
+          )}
           {slowBuffering && (
-            <div className="pointer-events-auto mt-4 flex flex-wrap items-center justify-center gap-2">
+            <div className="pointer-events-auto mt-4 flex max-w-md flex-wrap items-center justify-center gap-2">
               <button
                 onClick={(e) => {
                   e.stopPropagation();
@@ -1439,6 +1664,24 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
                 <RefreshCw className="h-3.5 w-3.5" />
                 Reconnect
               </button>
+              {playback?.isHls &&
+                !useNativeHls &&
+                Boolean(
+                  videoRef.current?.canPlayType('application/vnd.apple.mpegurl') ||
+                    videoRef.current?.canPlayType('application/x-mpegURL')
+                ) && (
+                  <button
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      resumeOverrideRef.current = getResumePositionForReload();
+                      setStreamStatus('Switching to native Android player...');
+                      setUseNativeHls(true);
+                    }}
+                    className="rounded-xl border border-emerald-400/35 bg-emerald-500/20 px-3.5 py-2 text-xs font-bold text-emerald-100 shadow-lg backdrop-blur-md hover:bg-emerald-500/30"
+                  >
+                    Native Player
+                  </button>
+                )}
               {quality !== 'auto' && (
                 <button
                   onClick={(e) => {

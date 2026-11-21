@@ -240,6 +240,18 @@ export function subscribeNetworkChange(listener: () => void): () => void {
   };
 }
 
+export function isAndroidWebViewPlatform(): boolean {
+  try {
+    const win = window as unknown as {
+      Capacitor?: { isNativePlatform?: () => boolean };
+    };
+    if (win.Capacitor?.isNativePlatform?.()) return true;
+    return /\bwv\b/i.test(navigator.userAgent);
+  } catch {
+    return false;
+  }
+}
+
 let cachedDirectPlayVideoCodecs: string | null = null;
 
 /**
@@ -252,16 +264,17 @@ export function getDirectPlayVideoCodecs(): string {
   const codecs = ['h264'];
   try {
     const v = document.createElement('video');
+    // Only advertise HEVC if the browser reports confident ('probably') 8-bit Main profile support
     if (
-      v.canPlayType('video/mp4; codecs="hvc1.1.6.L93.B0"') !== '' ||
-      v.canPlayType('video/mp4; codecs="hev1.1.6.L93.B0"') !== ''
+      v.canPlayType('video/mp4; codecs="hvc1.1.6.L120.90"') === 'probably' ||
+      v.canPlayType('video/mp4; codecs="hev1.1.6.L120.90"') === 'probably'
     ) {
       codecs.push('hevc', 'h265');
     }
-    if (v.canPlayType('video/webm; codecs="vp9"') !== '') {
+    if (v.canPlayType('video/webm; codecs="vp9"') === 'probably') {
       codecs.push('vp9');
     }
-    if (v.canPlayType('video/mp4; codecs="av01.0.04M.08"') !== '') {
+    if (v.canPlayType('video/mp4; codecs="av01.0.04M.08"') === 'probably') {
       codecs.push('av1');
     }
   } catch {

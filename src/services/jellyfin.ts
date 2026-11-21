@@ -465,7 +465,7 @@ async function fetchPlaybackInfoUncached(
               Container: 'mp4,m4v,webm',
               Type: 'Video',
               VideoCodec: getDirectPlayVideoCodecs(),
-              AudioCodec: 'aac,mp3,opus,flac,vorbis',
+              AudioCodec: 'aac,mp3,opus',
             },
           ]
         : [],
@@ -494,10 +494,10 @@ async function fetchPlaybackInfoUncached(
           Protocol: 'hls',
           Context: 'Streaming',
           MaxAudioChannels: '2',
-          // 3-second segments cut initial first-frame latency in half and keep mobile chunks small
-          SegmentLength: 3,
+          // Keep segments keyframe-aligned (BreakOnNonKeyFrames: false) so Android MSE never stalls waiting for an IDR frame
+          SegmentLength: 4,
           MinSegments: 1,
-          BreakOnNonKeyFrames: true,
+          BreakOnNonKeyFrames: false,
         },
       ],
       SubtitleProfiles: [
@@ -640,9 +640,9 @@ async function fetchPlaybackInfoUncached(
       VideoBitrate: String(videoBitrate),
       TranscodingMaxAudioChannels: '2',
       SegmentContainer: 'ts',
-      SegmentLength: '3',
+      SegmentLength: '4',
       MinSegments: '1',
-      BreakOnNonKeyFrames: 'true',
+      BreakOnNonKeyFrames: 'false',
       DeviceId: getDeviceId(),
       api_key: session.accessToken,
     });
