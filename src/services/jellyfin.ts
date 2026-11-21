@@ -1,11 +1,15 @@
 import { DEMO_EPISODES, DEMO_ITEMS, DEMO_SEASONS } from '../data/demoCatalog';
 import {
   QUALITY_OPTIONS,
+  type ActiveStreamSession,
   type AudioTrack,
   type AuthSession,
+  type FamilyUser,
   type MediaItem,
   type MediaType,
+  type ParentalTier,
   type PlaybackInfo,
+  type PublicUserProfile,
   type QualityPreset,
   type SeasonItem,
   type SubtitleTrack,
@@ -13,6 +17,7 @@ import {
 import { getDirectPlayVideoCodecs } from '../utils/network';
 
 const SESSION_STORAGE_KEY = 'qualiadept_stream_session_v1';
+const SAVED_PROFILES_KEY = 'qualiadept_stream_profiles_v1';
 const DEVICE_ID_KEY = 'qualiadept_stream_device_id';
 const DEMO_FAVORITES_KEY = 'qualiadept_demo_favorites';
 
@@ -38,6 +43,41 @@ export function normalizeServerUrl(url: string): string {
   return clean;
 }
 
+export function loadSavedProfiles(): AuthSession[] {
+  try {
+    const raw = localStorage.getItem(SAVED_PROFILES_KEY);
+    const list = raw ? (JSON.parse(raw) as AuthSession[]) : [];
+    const current = loadSavedSession();
+    if (current && !current.isDemo && !list.some((p) => p.userId === current.userId)) {
+      const merged = [current, ...list];
+      localStorage.setItem(SAVED_PROFILES_KEY, JSON.stringify(merged));
+      return merged;
+    }
+    return list.filter((p) => !p.isDemo && Boolean(p.accessToken) && Boolean(p.userId));
+  } catch {
+    return [];
+  }
+}
+
+export function upsertSavedProfile(session: AuthSession): void {
+  if (session.isDemo) return;
+  try {
+    const existing = loadSavedProfiles().filter((p) => p.userId !== session.userId);
+    localStorage.setItem(SAVED_PROFILES_KEY, JSON.stringify([session, ...existing]));
+  } catch {
+    // Ignore storage errors
+  }
+}
+
+export function removeSavedProfile(userId: string): void {
+  try {
+    const remaining = loadSavedProfiles().filter((p) => p.userId !== userId);
+    localStorage.setItem(SAVED_PROFILES_KEY, JSON.stringify(remaining));
+  } catch {
+    // Ignore storage errors
+  }
+}
+
 export function loadSavedSession(): AuthSession | null {
   try {
     const raw = localStorage.getItem(SESSION_STORAGE_KEY);
@@ -50,6 +90,9 @@ export function loadSavedSession(): AuthSession | null {
 
 export function saveSession(session: AuthSession): void {
   localStorage.setItem(SESSION_STORAGE_KEY, JSON.stringify(session));
+  if (!session.isDemo) {
+    upsertSavedProfile(session);
+  }
 }
 
 export function clearSession(): void {
@@ -63,6 +106,7 @@ export function createDemoSession(): AuthSession {
     userId: 'demo-user',
     username: 'Guest Preview',
     isDemo: true,
+    isAdmin: false,
   };
   saveSession(session);
   return session;
@@ -105,9 +149,58 @@ export async function authenticateJellyfin(
     userId: data.User.Id,
     username: data.User.Name,
     isDemo: false,
+    isAdmin: Boolean(data.User?.Policy?.IsAdministrator),
   };
   saveSession(session);
   return session;
+}
+
+/**
+ * Refreshes user metadata (including IsAdministrator) from Jellyfin so already-signed-in
+ * admin sessions automatically unlock the Family Manager without re-entering credentials.
+ */
+export async function refreshSessionProfile(session: AuthSession): Promise<AuthSession> {
+  if (session.isDemo) return session;
+  try {
+    const res = await fetch(`${session.serverUrl}/Users/Me`, {
+      headers: { Authorization: buildAuthHeader(session.accessToken) },
+    });
+    if (!res.ok) return session;
+    const data = await res.json();
+    const updated: AuthSession = {
+      ...session,
+      username: data.Name || session.username,
+      isAdmin: Boolean(data.Policy?.IsAdministrator),
+    };
+    saveSession(updated);
+    return updated;
+  } catch {
+    return session;
+  }
+}
+
+export async function fetchPublicUsers(serverUrl: string): Promise<PublicUserProfile[]> {
+  try {
+    const cleanUrl = normalizeServerUrl(serverUrl);
+    const res = await fetch(`${cleanUrl}/Users/Public`);
+    if (!res.ok) return [];
+    const data = (await res.json()) as Array<{
+      Id: string;
+      Name: string;
+      HasPassword?: boolean;
+      PrimaryImageTag?: string;
+    }>;
+    return data.map((u) => ({
+      id: u.Id,
+      name: u.Name,
+      hasPassword: Boolean(u.HasPassword),
+      avatarUrl: u.PrimaryImageTag
+        ? `${cleanUrl}/Users/${u.Id}/Images/Primary?tag=${encodeURIComponent(u.PrimaryImageTag)}&quality=85`
+        : undefined,
+    }));
+  } catch {
+    return [];
+  }
 }
 
 interface RawJellyfinItem {
@@ -1154,4 +1247,307 @@ export async function getDownloadStreamInfo(
     subtitles,
   };
 }
+
+// ============================================================================
+// Admin-Only Family Account Management (requires session.isAdmin === true)
+// ============================================================================
+
+interface RawJellyfinUserPolicy {
+  IsAdministrator?: boolean;
+  IsHidden?: boolean;
+  IsDisabled?: boolean;
+  MaxParentalRating?: number | null;
+  EnableMediaPlayback?: boolean;
+  EnableAudioPlaybackTranscoding?: boolean;
+  EnableVideoPlaybackTranscoding?: boolean;
+  EnablePlaybackRemuxing?: boolean;
+  EnableContentDeletion?: boolean;
+  EnableAllFolders?: boolean;
+  MaxActiveSessions?: number;
+  AuthenticationProviderId?: string;
+  PasswordResetProviderId?: string;
+  [key: string]: unknown;
+}
+
+interface RawJellyfinUser {
+  Id: string;
+  Name: string;
+  LastActivityDate?: string;
+  Policy?: RawJellyfinUserPolicy;
+}
+
+function ratingToParentalTier(maxRating?: number | null): ParentalTier {
+  if (typeof maxRating !== 'number') return 'adult';
+  if (maxRating <= 5) return 'kids';
+  if (maxRating <= 7) return 'teen';
+  return 'adult';
+}
+
+function parentalTierToRating(tier: ParentalTier): number | null {
+  if (tier === 'kids') return 5; // PG & below
+  if (tier === 'teen') return 7; // PG-13 & below
+  return null; // Unrestricted
+}
+
+function mapFamilyUser(raw: RawJellyfinUser): FamilyUser {
+  const p = raw.Policy || {};
+  const maxRating = typeof p.MaxParentalRating === 'number' ? p.MaxParentalRating : null;
+  return {
+    id: raw.Id,
+    name: raw.Name,
+    isAdmin: Boolean(p.IsAdministrator),
+    isDisabled: Boolean(p.IsDisabled),
+    isHidden: Boolean(p.IsHidden),
+    parentalTier: ratingToParentalTier(maxRating),
+    maxParentalRating: maxRating,
+    allowTranscoding: p.EnableVideoPlaybackTranscoding !== false,
+    maxActiveSessions: typeof p.MaxActiveSessions === 'number' ? p.MaxActiveSessions : 0,
+    lastActivityDate: raw.LastActivityDate,
+  };
+}
+
+export async function fetchAllFamilyUsers(session: AuthSession): Promise<FamilyUser[]> {
+  if (session.isDemo || !session.isAdmin) return [];
+  const res = await fetch(`${session.serverUrl}/Users`, {
+    headers: { Authorization: buildAuthHeader(session.accessToken) },
+  });
+  if (!res.ok) throw new Error(`Could not load family accounts (HTTP ${res.status})`);
+  const data = (await res.json()) as RawJellyfinUser[];
+  return data
+    .map(mapFamilyUser)
+    .sort((a, b) => Number(b.isAdmin) - Number(a.isAdmin) || a.name.localeCompare(b.name));
+}
+
+export async function fetchActiveStreams(session: AuthSession): Promise<ActiveStreamSession[]> {
+  if (session.isDemo || !session.isAdmin) return [];
+  try {
+    const res = await fetch(`${session.serverUrl}/Sessions`, {
+      headers: { Authorization: buildAuthHeader(session.accessToken) },
+    });
+    if (!res.ok) return [];
+    const data = (await res.json()) as Array<{
+      Id: string;
+      UserId?: string;
+      UserName?: string;
+      DeviceName?: string;
+      Client?: string;
+      NowPlayingItem?: {
+        Name?: string;
+        SeriesName?: string;
+        ParentIndexNumber?: number;
+        IndexNumber?: number;
+      };
+      PlayState?: {
+        PlayMethod?: string;
+        IsPaused?: boolean;
+      };
+    }>;
+    return data
+      .filter((s) => Boolean(s.NowPlayingItem?.Name))
+      .map((s) => {
+        const item = s.NowPlayingItem!;
+        const title = item.SeriesName
+          ? `${item.SeriesName} · S${item.ParentIndexNumber ?? 1}E${item.IndexNumber ?? 1} · ${item.Name}`
+          : item.Name || 'Playing';
+        return {
+          id: s.Id,
+          userId: s.UserId || '',
+          username: s.UserName || 'Unknown',
+          deviceName: s.DeviceName || 'Device',
+          client: s.Client || 'Player',
+          nowPlayingTitle: title,
+          playMethod: s.PlayState?.PlayMethod || 'DirectPlay',
+          isPaused: Boolean(s.PlayState?.IsPaused),
+        };
+      });
+  } catch {
+    return [];
+  }
+}
+
+export interface CreateFamilyUserInput {
+  name: string;
+  password: string;
+  parentalTier: ParentalTier;
+  allowTranscoding: boolean;
+  maxActiveSessions: number;
+  showOnSharedLogin: boolean;
+}
+
+/**
+ * Creates a strictly non-admin Jellyfin user with isolated watch history, My List,
+ * parental rating cap, and safe stream limits so only the owner account remains administrator.
+ */
+export async function createFamilyUser(
+  session: AuthSession,
+  input: CreateFamilyUserInput
+): Promise<FamilyUser> {
+  if (!session.isAdmin || session.isDemo) {
+    throw new Error('Only the administrator can create family accounts.');
+  }
+  const cleanName = input.name.trim();
+  if (!cleanName) throw new Error('Please enter a username.');
+  if (input.password.length < 4) {
+    throw new Error('Please use a password with at least 4 characters.');
+  }
+
+  const createRes = await fetch(`${session.serverUrl}/Users/New`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      Authorization: buildAuthHeader(session.accessToken),
+    },
+    body: JSON.stringify({
+      Name: cleanName,
+      Password: input.password,
+    }),
+  });
+
+  if (!createRes.ok) {
+    const detail = await createRes.text().catch(() => '');
+    throw new Error(detail.trim() || `Could not create user (HTTP ${createRes.status})`);
+  }
+
+  const created = (await createRes.json()) as RawJellyfinUser;
+  const basePolicy: RawJellyfinUserPolicy = created.Policy || {};
+
+  const safePolicy: RawJellyfinUserPolicy = {
+    ...basePolicy,
+    IsAdministrator: false,
+    IsDisabled: false,
+    IsHidden: !input.showOnSharedLogin,
+    EnableContentDeletion: false,
+    EnableMediaPlayback: true,
+    EnableAudioPlaybackTranscoding: true,
+    EnableVideoPlaybackTranscoding: input.allowTranscoding,
+    EnablePlaybackRemuxing: true,
+    EnableAllFolders: true,
+    MaxParentalRating: parentalTierToRating(input.parentalTier),
+    MaxActiveSessions: Math.max(0, Math.min(5, input.maxActiveSessions)),
+    AuthenticationProviderId:
+      basePolicy.AuthenticationProviderId ||
+      'Jellyfin.Server.Implementations.Users.DefaultAuthenticationProvider',
+    PasswordResetProviderId:
+      basePolicy.PasswordResetProviderId ||
+      'Jellyfin.Server.Implementations.Users.DefaultPasswordResetProvider',
+  };
+
+  const policyRes = await fetch(`${session.serverUrl}/Users/${created.Id}/Policy`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      Authorization: buildAuthHeader(session.accessToken),
+    },
+    body: JSON.stringify(safePolicy),
+  });
+
+  if (!policyRes.ok) {
+    throw new Error(`User created, but applying family limits failed (HTTP ${policyRes.status})`);
+  }
+
+  return mapFamilyUser({ ...created, Policy: safePolicy });
+}
+
+export async function updateFamilyUserPolicy(
+  session: AuthSession,
+  userId: string,
+  patch: {
+    parentalTier?: ParentalTier;
+    allowTranscoding?: boolean;
+    isDisabled?: boolean;
+    showOnSharedLogin?: boolean;
+    maxActiveSessions?: number;
+  }
+): Promise<FamilyUser> {
+  if (!session.isAdmin || session.isDemo) {
+    throw new Error('Only the administrator can update family accounts.');
+  }
+
+  const getRes = await fetch(`${session.serverUrl}/Users/${userId}`, {
+    headers: { Authorization: buildAuthHeader(session.accessToken) },
+  });
+  if (!getRes.ok) throw new Error(`Could not fetch user settings (HTTP ${getRes.status})`);
+  const existing = (await getRes.json()) as RawJellyfinUser;
+  const currentPolicy: RawJellyfinUserPolicy = existing.Policy || {};
+
+  const nextPolicy: RawJellyfinUserPolicy = {
+    ...currentPolicy,
+    // Never elevate a non-admin account through the family panel
+    IsAdministrator: Boolean(currentPolicy.IsAdministrator),
+    EnableContentDeletion: Boolean(currentPolicy.IsAdministrator)
+      ? Boolean(currentPolicy.EnableContentDeletion)
+      : false,
+  };
+
+  if (patch.parentalTier !== undefined) {
+    nextPolicy.MaxParentalRating = parentalTierToRating(patch.parentalTier);
+  }
+  if (patch.allowTranscoding !== undefined) {
+    nextPolicy.EnableVideoPlaybackTranscoding = patch.allowTranscoding;
+  }
+  if (patch.isDisabled !== undefined && !currentPolicy.IsAdministrator) {
+    nextPolicy.IsDisabled = patch.isDisabled;
+  }
+  if (patch.showOnSharedLogin !== undefined) {
+    nextPolicy.IsHidden = !patch.showOnSharedLogin;
+  }
+  if (patch.maxActiveSessions !== undefined) {
+    nextPolicy.MaxActiveSessions = Math.max(0, Math.min(5, patch.maxActiveSessions));
+  }
+
+  const postRes = await fetch(`${session.serverUrl}/Users/${userId}/Policy`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      Authorization: buildAuthHeader(session.accessToken),
+    },
+    body: JSON.stringify(nextPolicy),
+  });
+  if (!postRes.ok) throw new Error(`Failed to save user settings (HTTP ${postRes.status})`);
+
+  return mapFamilyUser({ ...existing, Policy: nextPolicy });
+}
+
+export async function resetFamilyUserPassword(
+  session: AuthSession,
+  userId: string,
+  newPassword: string
+): Promise<void> {
+  if (!session.isAdmin || session.isDemo) {
+    throw new Error('Only the administrator can reset passwords.');
+  }
+  if (newPassword.length < 4) {
+    throw new Error('New password must be at least 4 characters.');
+  }
+
+  const res = await fetch(`${session.serverUrl}/Users/${userId}/Password`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      Authorization: buildAuthHeader(session.accessToken),
+    },
+    body: JSON.stringify({
+      NewPw: newPassword,
+      ResetPassword: false,
+    }),
+  });
+  if (!res.ok) throw new Error(`Failed to reset password (HTTP ${res.status})`);
+}
+
+export async function deleteFamilyUser(session: AuthSession, userId: string): Promise<void> {
+  if (!session.isAdmin || session.isDemo) {
+    throw new Error('Only the administrator can delete accounts.');
+  }
+  if (userId === session.userId) {
+    throw new Error('You cannot delete your own admin account.');
+  }
+
+  const res = await fetch(`${session.serverUrl}/Users/${userId}`, {
+    method: 'DELETE',
+    headers: { Authorization: buildAuthHeader(session.accessToken) },
+  });
+  if (!res.ok) throw new Error(`Failed to delete account (HTTP ${res.status})`);
+  removeSavedProfile(userId);
+}
+
 

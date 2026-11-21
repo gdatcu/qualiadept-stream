@@ -1,6 +1,7 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { DetailModal } from './components/DetailModal';
 import { DownloadsView } from './components/DownloadsView';
+import { FamilyAdminView } from './components/FamilyAdminView';
 import { HeroBanner } from './components/HeroBanner';
 import { LoginScreen } from './components/LoginScreen';
 import { MediaRow } from './components/MediaRow';
@@ -11,6 +12,8 @@ import {
   fetchLibraryItems,
   fetchResumeItems,
   loadSavedSession,
+  refreshSessionProfile,
+  removeSavedProfile,
   toggleFavorite,
 } from './services/jellyfin';
 import {
@@ -23,6 +26,7 @@ import { initTvNavigation } from './utils/tvNavigation';
 
 export const App: React.FC = () => {
   const [session, setSession] = useState<AuthSession | null>(() => loadSavedSession());
+  const [switchingProfile, setSwitchingProfile] = useState(false);
   const [items, setItems] = useState<MediaItem[]>([]);
   const [resumeItems, setResumeItems] = useState<MediaItem[]>([]);
   const [loading, setLoading] = useState(false);
@@ -40,6 +44,8 @@ export const App: React.FC = () => {
 
   const sessionRef = useRef(session);
   sessionRef.current = session;
+  const switchingProfileRef = useRef(switchingProfile);
+  switchingProfileRef.current = switchingProfile;
   const activeTabRef = useRef(activeTab);
   activeTabRef.current = activeTab;
   const searchQueryRef = useRef(searchQuery);
@@ -96,7 +102,7 @@ export const App: React.FC = () => {
   }, []);
 
   // Samsung Android / Mobile Back button navigation guard (works in Chrome, PWA & Capacitor APK):
-  // Navigates back through Player -> Detail -> Search -> Tabs -> Home, then asks for double-Back to exit.
+  // Navigates back through Profile Switch -> Player -> Detail -> Search -> Tabs -> Home, then asks for double-Back to exit.
   useEffect(() => {
     const armBackGuard = () => {
       try {
@@ -115,6 +121,11 @@ export const App: React.FC = () => {
     window.addEventListener('keydown', onUserGesture, { passive: true });
 
     const onPopState = () => {
+      if (switchingProfileRef.current) {
+        setSwitchingProfile(false);
+        armBackGuard();
+        return;
+      }
       if (playingItemRef.current) {
         closePlayer();
         armBackGuard();
@@ -161,19 +172,41 @@ export const App: React.FC = () => {
     };
   }, [closePlayer]);
 
+  // Refresh admin status & load library whenever the active user changes
+  const activeSessionKey = session ? `${session.serverUrl}:${session.userId}:${session.accessToken}` : null;
   useEffect(() => {
-    if (session) {
-      loadLibrary(session);
+    if (!session) return;
+    loadLibrary(session);
+    if (!session.isDemo && session.isAdmin === undefined) {
+      refreshSessionProfile(session).then((refreshed) => {
+        if (refreshed.isAdmin !== session.isAdmin) {
+          setSession(refreshed);
+        }
+      });
     }
-  }, [session, loadLibrary]);
+  }, [activeSessionKey, loadLibrary]);
+
+  const handleLogin = (nextSession: AuthSession) => {
+    setSession(nextSession);
+    setSwitchingProfile(false);
+    setSelectedItem(null);
+    setPlayingItem(null);
+    setSearchQuery('');
+    setActiveTab('home');
+  };
 
   const handleSignOut = () => {
+    if (session && !session.isDemo) {
+      removeSavedProfile(session.userId);
+    }
     clearSession();
     setSession(null);
+    setSwitchingProfile(false);
     setItems([]);
     setResumeItems([]);
     setSelectedItem(null);
     setPlayingItem(null);
+    setActiveTab('home');
   };
 
   const handleToggleFavorite = async (item: MediaItem) => {
@@ -226,8 +259,14 @@ export const App: React.FC = () => {
     return filteredItems[0];
   }, [filteredItems]);
 
-  if (!session) {
-    return <LoginScreen onLogin={setSession} />;
+  if (!session || switchingProfile) {
+    return (
+      <LoginScreen
+        onLogin={handleLogin}
+        onCancel={session ? () => setSwitchingProfile(false) : undefined}
+        activeUserId={session?.userId}
+      />
+    );
   }
 
   return (
@@ -238,12 +277,15 @@ export const App: React.FC = () => {
         onTabChange={setActiveTab}
         searchQuery={searchQuery}
         onSearchChange={setSearchQuery}
+        onSwitchProfile={() => setSwitchingProfile(true)}
         onSignOut={handleSignOut}
         downloadCount={offlineCount}
         activeDownloadCount={activeDownloadCount}
       />
 
-      {activeTab === 'downloads' ? (
+      {activeTab === 'family' && session.isAdmin ? (
+        <FamilyAdminView session={session} />
+      ) : activeTab === 'downloads' ? (
         <DownloadsView onPlayOffline={setPlayingItem} />
       ) : loading ? (
         <div className="flex min-h-screen items-center justify-center">

@@ -1,9 +1,9 @@
 import React, { useEffect, useState } from 'react';
-import { LogOut, Search, X } from 'lucide-react';
+import { Crown, LogOut, Search, Users, X } from 'lucide-react';
 import type { AuthSession } from '../types/media';
 import { BrandLogo } from './BrandLogo';
 
-export type NavTab = 'home' | 'movies' | 'series' | 'mylist' | 'downloads';
+export type NavTab = 'home' | 'movies' | 'series' | 'mylist' | 'downloads' | 'family';
 
 interface NavbarProps {
   session: AuthSession;
@@ -11,6 +11,7 @@ interface NavbarProps {
   onTabChange: (tab: NavTab) => void;
   searchQuery: string;
   onSearchChange: (q: string) => void;
+  onSwitchProfile: () => void;
   onSignOut: () => void;
   downloadCount?: number;
   activeDownloadCount?: number;
@@ -22,12 +23,14 @@ export const Navbar: React.FC<NavbarProps> = ({
   onTabChange,
   searchQuery,
   onSearchChange,
+  onSwitchProfile,
   onSignOut,
   downloadCount = 0,
   activeDownloadCount = 0,
 }) => {
   const [scrolled, setScrolled] = useState(false);
   const [searchOpen, setSearchOpen] = useState(false);
+  const [profileMenuOpen, setProfileMenuOpen] = useState(false);
 
   useEffect(() => {
     const onScroll = () => setScrolled(window.scrollY > 30);
@@ -41,6 +44,7 @@ export const Navbar: React.FC<NavbarProps> = ({
     { id: 'series', label: 'Series' },
     { id: 'mylist', label: 'My List' },
     { id: 'downloads', label: 'Downloads' },
+    ...(session.isAdmin && !session.isDemo ? [{ id: 'family' as const, label: 'Family' }] : []),
   ];
 
   return (
@@ -75,6 +79,7 @@ export const Navbar: React.FC<NavbarProps> = ({
                     : 'text-zinc-400 hover:text-white hover:bg-white/5'
                 }`}
               >
+                {item.id === 'family' && <Crown className="h-3.5 w-3.5 text-amber-400" />}
                 <span>{item.label}</span>
                 {item.id === 'downloads' && (activeDownloadCount > 0 || downloadCount > 0) && (
                   <span
@@ -92,8 +97,8 @@ export const Navbar: React.FC<NavbarProps> = ({
           </nav>
         </div>
 
-        {/* Right: Search + User */}
-        <div className="flex items-center gap-3">
+        {/* Right: Search + Profile Switcher Menu */}
+        <div className="flex items-center gap-2.5 sm:gap-3">
           {searchOpen ? (
             <div className="flex items-center rounded-xl border border-white/15 bg-surface/90 px-3 py-1.5 backdrop-blur-md">
               <Search className="h-4 w-4 text-zinc-400" />
@@ -131,35 +136,96 @@ export const Navbar: React.FC<NavbarProps> = ({
             </span>
           )}
 
-          <div className="flex items-center gap-2 rounded-xl border border-white/10 bg-white/5 px-3 py-1.5">
-            <div className="flex h-6 w-6 items-center justify-center rounded-full bg-gradient-to-br from-violet-500 to-fuchsia-500 text-xs font-bold">
-              {session.username.charAt(0).toUpperCase()}
-            </div>
-            <span className="hidden sm:inline text-xs font-medium text-zinc-200 max-w-[100px] truncate">
-              {session.username}
-            </span>
-          </div>
+          {/* Clickable Profile Pill + Dropdown */}
+          <div className="relative">
+            <button
+              onClick={() => setProfileMenuOpen((v) => !v)}
+              className="flex items-center gap-2 rounded-xl border border-white/10 bg-white/5 px-2.5 py-1.5 transition hover:border-violet-400/50 hover:bg-white/10"
+              title="Switch Profile or Manage Account"
+            >
+              <div className="relative flex h-6 w-6 items-center justify-center rounded-full bg-gradient-to-br from-violet-500 to-fuchsia-500 text-xs font-bold">
+                {session.username.charAt(0).toUpperCase()}
+                {session.isAdmin && !session.isDemo && (
+                  <Crown className="absolute -top-1.5 -right-1.5 h-3 w-3 text-amber-400 drop-shadow" />
+                )}
+              </div>
+              <span className="hidden sm:inline text-xs font-medium text-zinc-200 max-w-[100px] truncate">
+                {session.username}
+              </span>
+            </button>
 
-          <button
-            onClick={onSignOut}
-            title="Sign Out"
-            className="rounded-xl p-2 text-zinc-400 transition hover:bg-white/10 hover:text-white"
-          >
-            <LogOut className="h-4 w-4" />
-          </button>
+            {profileMenuOpen && (
+              <>
+                <div
+                  className="fixed inset-0 z-40"
+                  onClick={() => setProfileMenuOpen(false)}
+                />
+                <div className="absolute right-0 mt-2 z-50 w-56 rounded-2xl border border-white/15 bg-surface/95 p-2 shadow-2xl backdrop-blur-xl">
+                  <div className="border-b border-white/10 px-3 py-2">
+                    <p className="truncate text-sm font-bold text-white">{session.username}</p>
+                    <p className="text-[11px] text-zinc-400">
+                      {session.isDemo
+                        ? 'Demo Preview'
+                        : session.isAdmin
+                        ? 'Server Administrator'
+                        : 'Family Member'}
+                    </p>
+                  </div>
+
+                  <div className="mt-1 space-y-0.5">
+                    <button
+                      onClick={() => {
+                        setProfileMenuOpen(false);
+                        onSwitchProfile();
+                      }}
+                      className="flex w-full items-center gap-2.5 rounded-xl px-3 py-2 text-left text-xs font-semibold text-zinc-200 transition hover:bg-white/10 hover:text-white"
+                    >
+                      <Users className="h-4 w-4 text-violet-400" />
+                      Switch Profile
+                    </button>
+
+                    {session.isAdmin && !session.isDemo && (
+                      <button
+                        onClick={() => {
+                          setProfileMenuOpen(false);
+                          onTabChange('family');
+                        }}
+                        className="flex w-full items-center gap-2.5 rounded-xl px-3 py-2 text-left text-xs font-semibold text-amber-200 transition hover:bg-amber-500/15"
+                      >
+                        <Crown className="h-4 w-4 text-amber-400" />
+                        Manage Family Accounts
+                      </button>
+                    )}
+
+                    <button
+                      onClick={() => {
+                        setProfileMenuOpen(false);
+                        onSignOut();
+                      }}
+                      className="flex w-full items-center gap-2.5 rounded-xl px-3 py-2 text-left text-xs font-semibold text-red-300 transition hover:bg-red-500/15"
+                    >
+                      <LogOut className="h-4 w-4" />
+                      Sign Out
+                    </button>
+                  </div>
+                </div>
+              </>
+            )}
+          </div>
         </div>
       </div>
 
       {/* Mobile tab bar */}
-      <div className="flex md:hidden items-center justify-around border-t border-white/5 bg-obsidian/90 px-1.5 py-1.5">
+      <div className="flex md:hidden items-center justify-around overflow-x-auto no-scrollbar border-t border-white/5 bg-obsidian/90 px-1.5 py-1.5">
         {navItems.map((item) => (
           <button
             key={item.id}
             onClick={() => onTabChange(item.id)}
-            className={`flex items-center gap-1 rounded-lg px-2 py-1 text-xs font-semibold ${
+            className={`flex flex-shrink-0 items-center gap-1 rounded-lg px-2 py-1 text-xs font-semibold ${
               activeTab === item.id ? 'text-violet-400' : 'text-zinc-400'
             }`}
           >
+            {item.id === 'family' && <Crown className="h-3 w-3 text-amber-400" />}
             <span>{item.label}</span>
             {item.id === 'downloads' && (activeDownloadCount > 0 || downloadCount > 0) && (
               <span

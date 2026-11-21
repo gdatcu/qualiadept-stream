@@ -91,4 +91,38 @@ export interface AuthSession {
   userId: string;
   username: string;
   isDemo: boolean;
+  isAdmin?: boolean;
+}
+
+export type ParentalTier = 'adult' | 'teen' | 'kids';
+
+export interface PublicUserProfile {
+  id: string;
+  name: string;
+  hasPassword: boolean;
+  avatarUrl?: string;
+}
+
+export interface FamilyUser {
+  id: string;
+  name: string;
+  isAdmin: boolean;
+  isDisabled: boolean;
+  isHidden: boolean;
+  parentalTier: ParentalTier;
+  maxParentalRating: number | null;
+  allowTranscoding: boolean;
+  maxActiveSessions: number;
+  lastActivityDate?: string;
+}
+
+export interface ActiveStreamSession {
+  id: string;
+  userId: string;
+  username: string;
+  deviceName: string;
+  client: string;
+  nowPlayingTitle: string;
+  playMethod: string;
+  isPaused: boolean;
 }
