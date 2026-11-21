@@ -1,5 +1,6 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { DetailModal } from './components/DetailModal';
+import { DownloadsView } from './components/DownloadsView';
 import { HeroBanner } from './components/HeroBanner';
 import { LoginScreen } from './components/LoginScreen';
 import { MediaRow } from './components/MediaRow';
@@ -12,6 +13,11 @@ import {
   loadSavedSession,
   toggleFavorite,
 } from './services/jellyfin';
+import {
+  listActiveDownloads,
+  listOfflineRecords,
+  subscribeOfflineDownloads,
+} from './services/offlineDownloads';
 import type { AuthSession, MediaItem } from './types/media';
 import { initTvNavigation } from './utils/tvNavigation';
 
@@ -27,6 +33,10 @@ export const App: React.FC = () => {
   const [selectedItem, setSelectedItem] = useState<MediaItem | null>(null);
   const [playingItem, setPlayingItem] = useState<MediaItem | null>(null);
   const [showExitToast, setShowExitToast] = useState(false);
+  const [offlineCount, setOfflineCount] = useState(() => listOfflineRecords().length);
+  const [activeDownloadCount, setActiveDownloadCount] = useState(
+    () => listActiveDownloads().length
+  );
 
   const sessionRef = useRef(session);
   sessionRef.current = session;
@@ -41,11 +51,22 @@ export const App: React.FC = () => {
   const exitConfirmUntilRef = useRef(0);
   const exitToastTimerRef = useRef<number | null>(null);
 
+  useEffect(() => {
+    const syncCounts = () => {
+      setOfflineCount(listOfflineRecords().length);
+      setActiveDownloadCount(listActiveDownloads().length);
+    };
+    syncCounts();
+    return subscribeOfflineDownloads(syncCounts);
+  }, []);
+
   const closePlayer = useCallback(() => {
     setPlayingItem(null);
     const activeSession = sessionRef.current;
-    if (activeSession && !activeSession.isDemo) {
-      fetchResumeItems(activeSession).then(setResumeItems);
+    if (activeSession && !activeSession.isDemo && navigator.onLine !== false) {
+      fetchResumeItems(activeSession)
+        .then(setResumeItems)
+        .catch(() => {});
     }
   }, []);
 
@@ -61,6 +82,10 @@ export const App: React.FC = () => {
       setResumeItems(resume);
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to load library');
+      // If offline / Airplane Mode and user already has saved downloads, jump straight to them
+      if (navigator.onLine === false && listOfflineRecords().length > 0) {
+        setActiveTab('downloads');
+      }
     } finally {
       setLoading(false);
     }
@@ -214,9 +239,13 @@ export const App: React.FC = () => {
         searchQuery={searchQuery}
         onSearchChange={setSearchQuery}
         onSignOut={handleSignOut}
+        downloadCount={offlineCount}
+        activeDownloadCount={activeDownloadCount}
       />
 
-      {loading ? (
+      {activeTab === 'downloads' ? (
+        <DownloadsView onPlayOffline={setPlayingItem} />
+      ) : loading ? (
         <div className="flex min-h-screen items-center justify-center">
           <div className="text-center">
             <div className="mx-auto h-10 w-10 animate-spin rounded-full border-4 border-violet-500 border-t-transparent" />
@@ -226,12 +255,22 @@ export const App: React.FC = () => {
       ) : error ? (
         <div className="flex min-h-screen flex-col items-center justify-center px-4 text-center">
           <p className="text-red-300 text-sm max-w-md">{error}</p>
-          <button
-            onClick={() => loadLibrary(session)}
-            className="mt-4 rounded-xl bg-violet-600 px-5 py-2.5 text-sm font-semibold text-white hover:bg-violet-500"
-          >
-            Retry
-          </button>
+          <div className="mt-4 flex flex-wrap items-center justify-center gap-3">
+            <button
+              onClick={() => loadLibrary(session)}
+              className="rounded-xl bg-violet-600 px-5 py-2.5 text-sm font-semibold text-white hover:bg-violet-500"
+            >
+              Retry
+            </button>
+            {offlineCount > 0 && (
+              <button
+                onClick={() => setActiveTab('downloads')}
+                className="rounded-xl border border-emerald-400/30 bg-emerald-500/15 px-5 py-2.5 text-sm font-semibold text-emerald-200 hover:bg-emerald-500/25"
+              >
+                Open Offline Downloads ({offlineCount})
+              </button>
+            )}
+          </div>
         </div>
       ) : searchQuery.trim() ? (
         <main className="mx-auto max-w-[1600px] px-4 pt-28 sm:px-8">

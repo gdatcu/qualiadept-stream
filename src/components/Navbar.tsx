@@ -3,7 +3,7 @@ import { LogOut, Search, X } from 'lucide-react';
 import type { AuthSession } from '../types/media';
 import { BrandLogo } from './BrandLogo';
 
-export type NavTab = 'home' | 'movies' | 'series' | 'mylist';
+export type NavTab = 'home' | 'movies' | 'series' | 'mylist' | 'downloads';
 
 interface NavbarProps {
   session: AuthSession;
@@ -12,6 +12,8 @@ interface NavbarProps {
   searchQuery: string;
   onSearchChange: (q: string) => void;
   onSignOut: () => void;
+  downloadCount?: number;
+  activeDownloadCount?: number;
 }
 
 export const Navbar: React.FC<NavbarProps> = ({
@@ -21,6 +23,8 @@ export const Navbar: React.FC<NavbarProps> = ({
   searchQuery,
   onSearchChange,
   onSignOut,
+  downloadCount = 0,
+  activeDownloadCount = 0,
 }) => {
   const [scrolled, setScrolled] = useState(false);
   const [searchOpen, setSearchOpen] = useState(false);
@@ -36,6 +40,7 @@ export const Navbar: React.FC<NavbarProps> = ({
     { id: 'movies', label: 'Movies' },
     { id: 'series', label: 'Series' },
     { id: 'mylist', label: 'My List' },
+    { id: 'downloads', label: 'Downloads' },
   ];
 
   return (
@@ -64,13 +69,24 @@ export const Navbar: React.FC<NavbarProps> = ({
               <button
                 key={item.id}
                 onClick={() => onTabChange(item.id)}
-                className={`rounded-lg px-3.5 py-2 text-sm font-medium transition ${
+                className={`flex items-center gap-1.5 rounded-lg px-3.5 py-2 text-sm font-medium transition ${
                   activeTab === item.id
                     ? 'bg-white/10 text-white'
                     : 'text-zinc-400 hover:text-white hover:bg-white/5'
                 }`}
               >
-                {item.label}
+                <span>{item.label}</span>
+                {item.id === 'downloads' && (activeDownloadCount > 0 || downloadCount > 0) && (
+                  <span
+                    className={`rounded-full px-1.5 py-0.5 text-[10px] font-bold leading-none ${
+                      activeDownloadCount > 0
+                        ? 'bg-violet-500 text-white animate-pulse'
+                        : 'bg-emerald-500/20 text-emerald-300'
+                    }`}
+                  >
+                    {activeDownloadCount > 0 ? activeDownloadCount : downloadCount}
+                  </span>
+                )}
               </button>
             ))}
           </nav>
@@ -135,16 +151,27 @@ export const Navbar: React.FC<NavbarProps> = ({
       </div>
 
       {/* Mobile tab bar */}
-      <div className="flex md:hidden items-center justify-around border-t border-white/5 bg-obsidian/90 px-2 py-1.5">
+      <div className="flex md:hidden items-center justify-around border-t border-white/5 bg-obsidian/90 px-1.5 py-1.5">
         {navItems.map((item) => (
           <button
             key={item.id}
             onClick={() => onTabChange(item.id)}
-            className={`rounded-lg px-3 py-1 text-xs font-semibold ${
+            className={`flex items-center gap-1 rounded-lg px-2 py-1 text-xs font-semibold ${
               activeTab === item.id ? 'text-violet-400' : 'text-zinc-400'
             }`}
           >
-            {item.label}
+            <span>{item.label}</span>
+            {item.id === 'downloads' && (activeDownloadCount > 0 || downloadCount > 0) && (
+              <span
+                className={`rounded-full px-1 py-0.5 text-[9px] font-bold leading-none ${
+                  activeDownloadCount > 0
+                    ? 'bg-violet-500 text-white animate-pulse'
+                    : 'bg-emerald-500/20 text-emerald-300'
+                }`}
+              >
+                {activeDownloadCount > 0 ? activeDownloadCount : downloadCount}
+              </span>
+            )}
           </button>
         ))}
       </div>

@@ -916,3 +916,219 @@ export async function reportPlaybackProgress(
     // Non-blocking telemetry
   }
 }
+
+export type DownloadPresetId = 'standard' | 'high' | 'saver' | 'original';
+
+export interface DownloadStreamInfo {
+  downloadUrl: string;
+  playSessionId: string;
+  mediaSourceId: string;
+  container: string;
+  fileSizeBytes?: number;
+  estimatedBytes?: number;
+  isTranscoded: boolean;
+  subtitles: SubtitleTrack[];
+}
+
+const DOWNLOAD_BITRATES: Record<DownloadPresetId, { bitrate?: number; maxWidth?: number }> = {
+  standard: { bitrate: 2_200_000, maxWidth: 1280 },
+  high: { bitrate: 5_000_000, maxWidth: 1920 },
+  saver: { bitrate: 1_100_000, maxWidth: 854 },
+  original: {},
+};
+
+/**
+ * Negotiates a progressive MP4 (or direct original) download URL via Jellyfin PlaybackInfo
+ * so users can download compact 720p (~1.3 GB) or 1080p (~3 GB) offline copies instead of 10+ GB masters,
+ * while still supporting 0%-CPU Direct Download whenever the source already fits the chosen size cap.
+ */
+export async function getDownloadStreamInfo(
+  session: AuthSession,
+  item: MediaItem,
+  presetId: DownloadPresetId,
+  forInAppPlayer = true
+): Promise<DownloadStreamInfo> {
+  if (session.isDemo) {
+    throw new Error('Offline downloads require signing in to your Jellyfin server.');
+  }
+
+  const spec = DOWNLOAD_BITRATES[presetId];
+  const maxBitrate = spec.bitrate ?? 80_000_000;
+  const token = encodeURIComponent(session.accessToken);
+
+  const playbackBody: Record<string, unknown> = {
+    MaxStreamingBitrate: maxBitrate,
+    EnableDirectPlay: true,
+    EnableDirectStream: true,
+    EnableTranscoding: true,
+    AllowVideoStreamCopy: true,
+    AllowAudioStreamCopy: true,
+    SubtitleStreamIndex: -1,
+    DeviceProfile: {
+      MaxStreamingBitrate: maxBitrate,
+      DirectPlayProfiles: [
+        {
+          Container: 'mp4,m4v,webm',
+          Type: 'Video',
+          VideoCodec: getDirectPlayVideoCodecs(),
+          AudioCodec: 'aac,mp3,opus',
+        },
+      ],
+      CodecProfiles: spec.maxWidth
+        ? [
+            {
+              Type: 'Video',
+              Codec: 'h264,hevc,vp9,av1,mpeg4,mpeg2video',
+              Conditions: [
+                {
+                  Condition: 'LessThanEqual',
+                  Property: 'Width',
+                  Value: String(spec.maxWidth),
+                  IsRequired: false,
+                },
+              ],
+            },
+          ]
+        : [],
+      TranscodingProfiles: [
+        {
+          Container: 'mp4',
+          Type: 'Video',
+          VideoCodec: 'h264',
+          AudioCodec: 'aac',
+          Protocol: 'http',
+          Context: 'Static',
+          MaxAudioChannels: '2',
+        },
+      ],
+      SubtitleProfiles: [
+        { Format: 'vtt', Method: 'External' },
+        { Format: 'srt', Method: 'External' },
+        { Format: 'ass', Method: 'External' },
+        { Format: 'ssa', Method: 'External' },
+        { Format: 'subrip', Method: 'External' },
+      ],
+    },
+  };
+
+  const res = await fetch(
+    `${session.serverUrl}/Items/${item.id}/PlaybackInfo?UserId=${session.userId}`,
+    {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: buildAuthHeader(session.accessToken),
+      },
+      body: JSON.stringify(playbackBody),
+    }
+  );
+
+  if (!res.ok) throw new Error(`Failed to prepare download (HTTP ${res.status})`);
+  const data = await res.json();
+  const source = data.MediaSources?.[0];
+  if (!source) throw new Error('No downloadable media source found.');
+
+  const playSessionId: string = data.PlaySessionId || crypto.randomUUID();
+  const mediaSourceId: string = source.Id;
+  const streams: RawMediaStream[] = source.MediaStreams || [];
+  const sourceContainer = (source.Container || 'mp4').toLowerCase();
+  const sourceSize: number | undefined = typeof source.Size === 'number' ? source.Size : undefined;
+  const videoStream = streams.find((s) => s.Type === 'Video');
+  const sourceBitrate: number | undefined =
+    typeof source.Bitrate === 'number' ? source.Bitrate : videoStream?.BitRate;
+  const sourceWidth: number | undefined = videoStream?.Width;
+
+  const subtitles: SubtitleTrack[] = streams
+    .filter((s) => s.Type === 'Subtitle' && Boolean(s.IsTextSubtitleStream))
+    .map((s) => ({
+      index: s.Index,
+      label: formatSubtitleLabel(s),
+      language: s.Language || 'und',
+      isText: true,
+      codec: s.Codec,
+      isDefault: Boolean(s.IsDefault),
+      isForced: Boolean(s.IsForced),
+      url: `${session.serverUrl}/Videos/${item.id}/${mediaSourceId}/Subtitles/${s.Index}/0/Stream.vtt?api_key=${token}`,
+    }));
+
+  // Direct device save of raw Original file
+  if (presetId === 'original' && !forInAppPlayer) {
+    return {
+      downloadUrl: `${session.serverUrl}/Items/${item.id}/Download?api_key=${token}`,
+      playSessionId,
+      mediaSourceId,
+      container: sourceContainer,
+      fileSizeBytes: sourceSize,
+      estimatedBytes: sourceSize,
+      isTranscoded: false,
+      subtitles,
+    };
+  }
+
+  const fitsPreset =
+    presetId === 'original' ||
+    ((!sourceBitrate || sourceBitrate <= maxBitrate * 1.15) &&
+      (!spec.maxWidth || !sourceWidth || sourceWidth <= spec.maxWidth));
+
+  const isBrowserPlayableContainer = ['mp4', 'm4v', 'webm'].includes(sourceContainer);
+
+  if (fitsPreset && source.SupportsDirectPlay && isBrowserPlayableContainer) {
+    return {
+      downloadUrl: `${session.serverUrl}/Videos/${item.id}/stream.${sourceContainer}?static=true&mediaSourceId=${mediaSourceId}&api_key=${token}`,
+      playSessionId,
+      mediaSourceId,
+      container: sourceContainer,
+      fileSizeBytes: sourceSize,
+      estimatedBytes: sourceSize,
+      isTranscoded: false,
+      subtitles,
+    };
+  }
+
+  const runtimeSec = item.runtimeTicks
+    ? item.runtimeTicks / 10_000_000
+    : (item.runtimeMinutes || 60) * 60;
+  const estimatedBytes = spec.bitrate
+    ? Math.round((runtimeSec * (spec.bitrate + 160_000)) / 8)
+    : sourceSize;
+
+  let downloadUrl: string;
+  if (source.TranscodingUrl && !source.TranscodingUrl.includes('.m3u8')) {
+    const parsed = new URL(source.TranscodingUrl, session.serverUrl);
+    parsed.searchParams.delete('SubtitleStreamIndex');
+    parsed.searchParams.delete('SubtitleMethod');
+    downloadUrl = parsed.toString();
+  } else {
+    const audioBitrate = 160_000;
+    const videoBitrate = Math.max(450_000, (spec.bitrate ?? 8_000_000) - audioBitrate);
+    const params = new URLSearchParams({
+      MediaSourceId: mediaSourceId,
+      PlaySessionId: playSessionId,
+      VideoCodec: 'h264',
+      AudioCodec: 'aac',
+      AudioBitrate: String(audioBitrate),
+      VideoBitrate: String(videoBitrate),
+      TranscodingMaxAudioChannels: '2',
+      DeviceId: `${getDeviceId()}-dl`,
+      api_key: session.accessToken,
+    });
+    if (spec.maxWidth) {
+      params.set('MaxWidth', String(spec.maxWidth));
+    }
+    if (typeof source.DefaultAudioStreamIndex === 'number') {
+      params.set('AudioStreamIndex', String(source.DefaultAudioStreamIndex));
+    }
+    downloadUrl = `${session.serverUrl}/Videos/${item.id}/stream.mp4?${params.toString()}`;
+  }
+
+  return {
+    downloadUrl,
+    playSessionId,
+    mediaSourceId,
+    container: 'mp4',
+    estimatedBytes,
+    isTranscoded: true,
+    subtitles,
+  };
+}
+

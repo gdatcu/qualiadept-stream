@@ -4,6 +4,7 @@ import {
   ArrowLeft,
   Cast,
   Check,
+  HardDrive,
   Maximize,
   Minimize,
   Pause,
@@ -26,6 +27,7 @@ import {
   prefetchPlaybackInfo,
   reportPlaybackProgress,
 } from '../services/jellyfin';
+import { getOfflinePlaybackInfo } from '../services/offlineDownloads';
 import {
   QUALITY_OPTIONS,
   type AuthSession,
@@ -126,11 +128,13 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
   const stallTimestampsRef = useRef<number[]>([]);
   const hasStartedPlayingRef = useRef(false);
   const nextPrefetchedIdRef = useRef<string | null>(null);
+  const offlineRevokeRef = useRef<(() => void) | null>(null);
 
   const [quality, setQuality] = useState<QualityPreset>(() => getRecommendedQuality());
   const [autoStability, setAutoStability] = useState(true);
   const [bufferAheadSec, setBufferAheadSec] = useState(0);
   const [networkLabel, setNetworkLabel] = useState(() => getNetworkLabel());
+  const [offlineQualityLabel, setOfflineQualityLabel] = useState<string | null>(null);
   const [forceHls, setForceHls] = useState(false);
   const [adaptiveNotice, setAdaptiveNotice] = useState<string | null>(null);
   const [playback, setPlayback] = useState<PlaybackInfo | null>(null);
@@ -396,9 +400,12 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
     };
   }, [session, item]);
 
-  // Fetch stream URL, audio & subtitle tracks whenever item, quality, audio, burn-in subtitle, forceHls, or retry changes
+  // Fetch stream URL (preferring local offline OPFS download when available!) whenever item, quality, audio, burn-in, or retry changes
   useEffect(() => {
     let active = true;
+    offlineRevokeRef.current?.();
+    offlineRevokeRef.current = null;
+    setOfflineQualityLabel(null);
     setPlayback(null);
     setLoading(true);
     setBuffering(false);
@@ -408,24 +415,47 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
     streamStartedAtRef.current = 0;
     stallTimestampsRef.current = [];
 
-    getPlaybackInfo(session, item, quality, {
-      audioStreamIndex: selectedAudioIndex,
-      burnInSubtitleIndex: burnInSubIndex,
-      forceHls,
-      bypassCache: retryNonce > 0,
-    })
-      .then((info) => {
-        if (active) setPlayback(info);
-      })
-      .catch((err) => {
-        if (active) {
-          setError(err instanceof Error ? err.message : 'Failed to start playback');
-          setLoading(false);
+    const tryLoad = async () => {
+      const canUseOffline =
+        !manualQualityLockedRef.current &&
+        selectedAudioIndex === null &&
+        burnInSubIndex === null &&
+        !forceHls;
+
+      if (canUseOffline) {
+        const offline = await getOfflinePlaybackInfo(item.id);
+        if (!active) {
+          offline?.revoke();
+          return;
         }
+        if (offline) {
+          offlineRevokeRef.current = offline.revoke;
+          setOfflineQualityLabel(offline.qualityLabel);
+          setPlayback(offline.playback);
+          return;
+        }
+      }
+
+      const info = await getPlaybackInfo(session, item, quality, {
+        audioStreamIndex: selectedAudioIndex,
+        burnInSubtitleIndex: burnInSubIndex,
+        forceHls,
+        bypassCache: retryNonce > 0,
       });
+      if (active) setPlayback(info);
+    };
+
+    tryLoad().catch((err) => {
+      if (active) {
+        setError(err instanceof Error ? err.message : 'Failed to start playback');
+        setLoading(false);
+      }
+    });
 
     return () => {
       active = false;
+      offlineRevokeRef.current?.();
+      offlineRevokeRef.current = null;
     };
   }, [session, item, quality, selectedAudioIndex, burnInSubIndex, forceHls, retryNonce]);
 
@@ -464,15 +494,17 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
       setLoading(false);
       setBuffering(false);
       setSlowBuffering(false);
-      reportPlaybackProgress(
-        session,
-        item.id,
-        playback.mediaSourceId,
-        playback.playSessionId,
-        initialSeekTarget || video.currentTime,
-        false,
-        'start'
-      );
+      if (!playback.mediaSourceId.startsWith('offline-')) {
+        reportPlaybackProgress(
+          session,
+          item.id,
+          playback.mediaSourceId,
+          playback.playSessionId,
+          initialSeekTarget || video.currentTime,
+          false,
+          'start'
+        );
+      }
     };
 
     if (playback.isHls && Hls.isSupported()) {
@@ -583,10 +615,15 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
       hls.loadSource(playback.streamUrl);
     } else {
       hlsRef.current = null;
+      const isOfflineFile = playback.mediaSourceId.startsWith('offline-');
       const onNativeError = () => {
-        // If Direct Play fails, try stepping down to adaptive HLS automatically first
-        if (stepDownQuality('switching to adaptive stream')) return;
-        setError('Could not load this stream directly. Tap Retry or try another quality.');
+        // If online Direct Play fails, try stepping down to adaptive HLS automatically first
+        if (!isOfflineFile && stepDownQuality('switching to adaptive stream')) return;
+        setError(
+          isOfflineFile
+            ? 'Could not decode this offline download in the browser. Delete and re-download in Mobile HD (MP4).'
+            : 'Could not load this stream directly. Tap Retry or try another quality.'
+        );
         setLoading(false);
         setBuffering(false);
         setSlowBuffering(false);
@@ -607,7 +644,7 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
     return () => {
       if (retryTimer) window.clearTimeout(retryTimer);
       hlsRef.current = null;
-      if (playback) {
+      if (playback && !playback.mediaSourceId.startsWith('offline-')) {
         reportPlaybackProgress(
           session,
           item.id,
@@ -626,7 +663,7 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
   // Continuous 1-second Stability-First Monitor (works on Wi-Fi, 5G, 4G, 3G):
   // Lowers quality automatically until playback runs with zero periodic buffering.
   useEffect(() => {
-    if (!playback || loading || error) {
+    if (!playback || loading || error || playback.mediaSourceId.startsWith('offline-')) {
       setBufferAheadSec(0);
       return;
     }
@@ -750,7 +787,7 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
 
   // Sync progress with Jellyfin every 10s (uses TV's live progress while casting so paused local video never conflicts)
   useEffect(() => {
-    if (!playback || session.isDemo) return;
+    if (!playback || session.isDemo || playback.mediaSourceId.startsWith('offline-')) return;
     const id = window.setInterval(() => {
       const liveCast = castStateRef.current;
       if (liveCast.isConnected) {
@@ -1778,10 +1815,23 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
                 }}
                 className="flex items-center gap-1 rounded-lg bg-white/10 px-2 py-1.5 sm:px-2.5 text-[11px] sm:text-xs font-semibold text-zinc-100 transition hover:bg-white/20 focus:outline-none focus:ring-2 focus:ring-violet-400"
               >
-                <Settings className="h-4 w-4 text-violet-400" />
-                <span className="max-w-[92px] truncate sm:max-w-none">
-                  {autoStability ? `Auto · ${activeQualityLabel.replace(' HD', '').replace(' SD', '')}` : activeQualityLabel}
-                </span>
+                {offlineQualityLabel ? (
+                  <>
+                    <HardDrive className="h-4 w-4 text-emerald-400" />
+                    <span className="max-w-[96px] truncate sm:max-w-none">
+                      Offline · {offlineQualityLabel}
+                    </span>
+                  </>
+                ) : (
+                  <>
+                    <Settings className="h-4 w-4 text-violet-400" />
+                    <span className="max-w-[92px] truncate sm:max-w-none">
+                      {autoStability
+                        ? `Auto · ${activeQualityLabel.replace(' HD', '').replace(' SD', '')}`
+                        : activeQualityLabel}
+                    </span>
+                  </>
+                )}
               </button>
               {showQualityMenu && (
                 <div className="fixed inset-x-3 bottom-20 z-40 max-h-[68dvh] overflow-y-auto rounded-2xl border border-white/15 bg-surface/95 p-2 shadow-2xl backdrop-blur-xl sm:absolute sm:inset-x-auto sm:bottom-14 sm:right-0 sm:w-72 sm:rounded-xl">
