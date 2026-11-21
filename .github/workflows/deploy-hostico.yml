@@ -77,6 +77,11 @@ jobs:
           npx cap add android
           npx cap sync android
 
+      - name: Apply Q-Play Android launcher icons & dark splash screen
+        run: |
+          python3 -c "import PIL" 2>/dev/null || python3 -m pip install --quiet pillow
+          python3 scripts/apply-android-icons.py --android
+
       - name: Build Android APK (Debug)
         working-directory: android
         run: |

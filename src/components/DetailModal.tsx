@@ -1,7 +1,8 @@
 import React, { useEffect, useState } from 'react';
 import { Check, Play, Plus, Star, X } from 'lucide-react';
-import { fetchEpisodes, fetchSeasons } from '../services/jellyfin';
+import { fetchEpisodes, fetchSeasons, prefetchPlaybackInfo } from '../services/jellyfin';
 import type { AuthSession, MediaItem, SeasonItem } from '../types/media';
+import { getRecommendedQuality } from '../utils/network';
 
 interface DetailModalProps {
   session: AuthSession;
@@ -27,6 +28,13 @@ export const DetailModal: React.FC<DetailModalProps> = ({
   useEffect(() => {
     setImgFailed(false);
   }, [item.id]);
+
+  // Pre-warm PlaybackInfo + Direct Play header while user reads details (Netflix-instant Play)
+  useEffect(() => {
+    if (item.type !== 'Series') {
+      prefetchPlaybackInfo(session, item, getRecommendedQuality());
+    }
+  }, [session, item]);
 
   useEffect(() => {
     const onKeyDown = (e: KeyboardEvent) => {
@@ -57,7 +65,12 @@ export const DetailModal: React.FC<DetailModalProps> = ({
     setLoadingEpisodes(true);
     fetchEpisodes(session, item.id, selectedSeasonId)
       .then((eps) => {
-        if (active) setEpisodes(eps);
+        if (active) {
+          setEpisodes(eps);
+          if (eps.length > 0) {
+            prefetchPlaybackInfo(session, eps[0], getRecommendedQuality());
+          }
+        }
       })
       .finally(() => {
         if (active) setLoadingEpisodes(false);

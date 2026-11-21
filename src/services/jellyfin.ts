@@ -364,6 +364,27 @@ export interface PlaybackOptions {
   audioStreamIndex?: number | null;
   /** Jellyfin stream index for an image-based subtitle (PGS/VobSub) to burn into the HLS stream */
   burnInSubtitleIndex?: number | null;
+  /** Skip prefetch cache (e.g. manual Retry) so a brand new PlaySessionId is issued */
+  bypassCache?: boolean;
+  /** Force HLS transcoding/remuxing even if source could Direct Play (used when Direct Play stalls on mobile) */
+  forceHls?: boolean;
+}
+
+interface PrefetchEntry {
+  info: PlaybackInfo;
+  ts: number;
+}
+
+const PREFETCH_TTL_MS = 45_000;
+const playbackPrefetchCache = new Map<string, PrefetchEntry>();
+const playbackInFlight = new Map<string, Promise<PlaybackInfo>>();
+
+function buildPlaybackCacheKey(
+  itemId: string,
+  quality: QualityPreset,
+  options: PlaybackOptions
+): string {
+  return `${itemId}:${quality}:${options.audioStreamIndex ?? 'def'}:${options.burnInSubtitleIndex ?? 'none'}:${options.forceHls ? 'hls' : 'any'}`;
 }
 
 interface RawMediaStream {
@@ -403,11 +424,11 @@ function formatSubtitleLabel(s: RawMediaStream): string {
   return parts.join(' · ');
 }
 
-export async function getPlaybackInfo(
+async function fetchPlaybackInfoUncached(
   session: AuthSession,
   item: MediaItem,
-  quality: QualityPreset = 'auto',
-  options: PlaybackOptions = {}
+  quality: QualityPreset,
+  options: PlaybackOptions
 ): Promise<PlaybackInfo> {
   if (session.isDemo) {
     const url = item.demoStreamUrl || 'https://test-streams.mux.dev/x36xhzz/x36xhzz.m3u8';
@@ -426,7 +447,7 @@ export async function getPlaybackInfo(
   const needsBurnIn = options.burnInSubtitleIndex !== undefined && options.burnInSubtitleIndex !== null;
   const hasExplicitAudio = options.audioStreamIndex !== undefined && options.audioStreamIndex !== null;
   const maxBitrate = preset.videoBitrate ?? 40_000_000;
-  const allowDirectPlay = !needsBurnIn && !hasExplicitAudio;
+  const allowDirectPlay = !needsBurnIn && !hasExplicitAudio && !options.forceHls;
 
   const playbackBody: Record<string, unknown> = {
     MaxStreamingBitrate: maxBitrate,
@@ -472,7 +493,8 @@ export async function getPlaybackInfo(
           Protocol: 'hls',
           Context: 'Streaming',
           MaxAudioChannels: '2',
-          SegmentLength: 6,
+          // 3-second segments cut initial first-frame latency in half and keep mobile chunks small
+          SegmentLength: 3,
           MinSegments: 1,
           BreakOnNonKeyFrames: true,
         },
@@ -569,7 +591,7 @@ export async function getPlaybackInfo(
   const isNonDefaultAudio =
     hasExplicitAudio && defaultAudioIndex !== null && options.audioStreamIndex !== defaultAudioIndex;
   const canDirectPlay =
-    !needsBurnIn &&
+    allowDirectPlay &&
     !isNonDefaultAudio &&
     fitsSelectedQuality &&
     source.SupportsDirectPlay &&
@@ -605,7 +627,7 @@ export async function getPlaybackInfo(
     hlsUrl = parsed.toString();
   } else {
     const audioBitrate = 192_000;
-    const videoBitrate = Math.max(500_000, (preset.videoBitrate ?? 12_000_000) - audioBitrate);
+    const videoBitrate = Math.max(400_000, (preset.videoBitrate ?? 12_000_000) - audioBitrate);
     const hlsParams = new URLSearchParams({
       MediaSourceId: mediaSourceId,
       PlaySessionId: playSessionId,
@@ -615,7 +637,7 @@ export async function getPlaybackInfo(
       VideoBitrate: String(videoBitrate),
       TranscodingMaxAudioChannels: '2',
       SegmentContainer: 'ts',
-      SegmentLength: '6',
+      SegmentLength: '3',
       MinSegments: '1',
       BreakOnNonKeyFrames: 'true',
       DeviceId: getDeviceId(),
@@ -643,6 +665,66 @@ export async function getPlaybackInfo(
     defaultAudioIndex,
     subtitles,
   };
+}
+
+/**
+ * Warms Jellyfin PlaybackInfo in the background (while user views DetailModal or nears end of an episode)
+ * so tapping Play starts with 0ms PlaybackInfo wait. For Direct Play MP4s, also warms the first 128 KB
+ * (moov atom + Google Drive rclone VFS cache) without starting any server transcoding job.
+ */
+export function prefetchPlaybackInfo(
+  session: AuthSession,
+  item: MediaItem,
+  quality: QualityPreset = 'auto'
+): void {
+  if (session.isDemo || item.type === 'Series') return;
+  const key = buildPlaybackCacheKey(item.id, quality, {});
+  const cached = playbackPrefetchCache.get(key);
+  if (cached && Date.now() - cached.ts < PREFETCH_TTL_MS) return;
+  if (playbackInFlight.has(key)) return;
+
+  const promise = fetchPlaybackInfoUncached(session, item, quality, {})
+    .then((info) => {
+      playbackPrefetchCache.set(key, { info, ts: Date.now() });
+      if (!info.isHls) {
+        // Warm TCP/TLS + Google Drive rclone SSD cache with first 128 KB header range
+        fetch(info.streamUrl, {
+          headers: { Range: 'bytes=0-131071' },
+        }).catch(() => {});
+      }
+      return info;
+    })
+    .finally(() => {
+      playbackInFlight.delete(key);
+    });
+
+  playbackInFlight.set(key, promise);
+  promise.catch(() => {});
+}
+
+export async function getPlaybackInfo(
+  session: AuthSession,
+  item: MediaItem,
+  quality: QualityPreset = 'auto',
+  options: PlaybackOptions = {}
+): Promise<PlaybackInfo> {
+  const key = buildPlaybackCacheKey(item.id, quality, options);
+
+  if (!options.bypassCache) {
+    const cached = playbackPrefetchCache.get(key);
+    if (cached && Date.now() - cached.ts < PREFETCH_TTL_MS) {
+      playbackPrefetchCache.delete(key);
+      return cached.info;
+    }
+    const inFlight = playbackInFlight.get(key);
+    if (inFlight) {
+      const info = await inFlight;
+      playbackPrefetchCache.delete(key);
+      return info;
+    }
+  }
+
+  return fetchPlaybackInfoUncached(session, item, quality, options);
 }
 
 /**

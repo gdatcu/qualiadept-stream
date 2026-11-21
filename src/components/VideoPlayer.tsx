@@ -23,6 +23,7 @@ import {
   fetchNextEpisode,
   getCastPlaybackInfo,
   getPlaybackInfo,
+  prefetchPlaybackInfo,
   reportPlaybackProgress,
 } from '../services/jellyfin';
 import {
@@ -46,6 +47,13 @@ import {
   toggleChromecastPlayPause,
   type CastState,
 } from '../utils/chromecast';
+import {
+  getNextLowerQuality,
+  getRecommendedQuality,
+  qualityRank,
+  recordMeasuredThroughput,
+  subscribeNetworkChange,
+} from '../utils/network';
 
 interface VideoPlayerProps {
   session: AuthSession;
@@ -73,25 +81,6 @@ function loadSavedBrightness(): number {
   }
 }
 
-function getInitialQuality(): QualityPreset {
-  try {
-    const nav = navigator as Navigator & {
-      connection?: { type?: string; effectiveType?: string; saveData?: boolean };
-    };
-    const conn = nav.connection;
-    if (!conn) return 'auto';
-    if (conn.saveData || conn.effectiveType === '2g' || conn.effectiveType === '3g') {
-      return '480p';
-    }
-    if (conn.type === 'cellular') {
-      return '720p';
-    }
-  } catch {
-    // Fallback to Original
-  }
-  return 'auto';
-}
-
 function formatTime(sec: number): string {
   if (!Number.isFinite(sec) || sec < 0) return '0:00';
   const h = Math.floor(sec / 3600);
@@ -114,8 +103,16 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
   const resumeOverrideRef = useRef<number | null>(null);
   const swipeStartRef = useRef<{ y: number; startBrightness: number; moved: boolean } | null>(null);
   const brightnessHudTimerRef = useRef<number | null>(null);
+  const adaptiveNoticeTimerRef = useRef<number | null>(null);
+  const manualQualityLockedRef = useRef(false);
+  const lastAdaptTsRef = useRef(0);
+  const stallTimestampsRef = useRef<number[]>([]);
+  const hasStartedPlayingRef = useRef(false);
+  const nextPrefetchedIdRef = useRef<string | null>(null);
 
-  const [quality, setQuality] = useState<QualityPreset>(() => getInitialQuality());
+  const [quality, setQuality] = useState<QualityPreset>(() => getRecommendedQuality());
+  const [forceHls, setForceHls] = useState(false);
+  const [adaptiveNotice, setAdaptiveNotice] = useState<string | null>(null);
   const [playback, setPlayback] = useState<PlaybackInfo | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
@@ -190,6 +187,7 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
   useEffect(() => {
     return () => {
       if (brightnessHudTimerRef.current) window.clearTimeout(brightnessHudTimerRef.current);
+      if (adaptiveNoticeTimerRef.current) window.clearTimeout(adaptiveNoticeTimerRef.current);
     };
   }, []);
 
@@ -276,6 +274,54 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
     isDraggingBrightness,
   ]);
 
+  const qualityRef = useRef<QualityPreset>(quality);
+  qualityRef.current = quality;
+  const playbackRef = useRef<PlaybackInfo | null>(playback);
+  playbackRef.current = playback;
+
+  const flashAdaptiveNotice = useCallback((message: string) => {
+    setAdaptiveNotice(message);
+    if (adaptiveNoticeTimerRef.current) window.clearTimeout(adaptiveNoticeTimerRef.current);
+    adaptiveNoticeTimerRef.current = window.setTimeout(() => {
+      setAdaptiveNotice(null);
+    }, 3200);
+  }, []);
+
+  const stepDownQuality = useCallback(
+    (reason: string, targetOverride?: QualityPreset): boolean => {
+      if (manualQualityLockedRef.current || castStateRef.current.isConnected) return false;
+      const now = Date.now();
+      if (now - lastAdaptTsRef.current < 15_000) return false;
+
+      const currentQ = qualityRef.current;
+      const nextQ = targetOverride ?? getNextLowerQuality(currentQ);
+      if (!nextQ || qualityRank(nextQ) >= qualityRank(currentQ)) return false;
+
+      lastAdaptTsRef.current = now;
+      stallTimestampsRef.current = [];
+      resumeOverrideRef.current = videoRef.current?.currentTime || 0;
+      if (playbackRef.current && !playbackRef.current.isHls) {
+        setForceHls(true);
+      }
+      setQuality(nextQ);
+      const label = QUALITY_OPTIONS.find((q) => q.id === nextQ)?.label || nextQ;
+      flashAdaptiveNotice(`Switched to ${label} · ${reason}`);
+      return true;
+    },
+    [flashAdaptiveNotice]
+  );
+
+  // Live mobile network change adaptation (e.g. Wi-Fi → 5G or 5G → weak 4G/3G mid-playback)
+  useEffect(() => {
+    return subscribeNetworkChange(() => {
+      if (manualQualityLockedRef.current || castStateRef.current.isConnected) return;
+      const recommended = getRecommendedQuality();
+      if (qualityRank(recommended) < qualityRank(qualityRef.current)) {
+        stepDownQuality('adapted to mobile signal', recommended);
+      }
+    });
+  }, [stepDownQuality]);
+
   // Reset next-episode and track selection state when item changes
   useEffect(() => {
     let active = true;
@@ -285,7 +331,14 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
     setSelectedAudioIndex(null);
     setActiveTextSubIndex(null);
     setBurnInSubIndex(null);
+    setForceHls(false);
     resumeOverrideRef.current = null;
+    stallTimestampsRef.current = [];
+    hasStartedPlayingRef.current = false;
+    nextPrefetchedIdRef.current = null;
+    if (!manualQualityLockedRef.current) {
+      setQuality(getRecommendedQuality());
+    }
 
     if (item.type === 'Episode') {
       fetchNextEpisode(session, item).then((ep) => {
@@ -297,7 +350,7 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
     };
   }, [session, item]);
 
-  // Fetch stream URL, audio & subtitle tracks whenever item, quality, audio, burn-in subtitle, or retry changes
+  // Fetch stream URL, audio & subtitle tracks whenever item, quality, audio, burn-in subtitle, forceHls, or retry changes
   useEffect(() => {
     let active = true;
     setPlayback(null);
@@ -305,10 +358,14 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
     setBuffering(false);
     setSlowBuffering(false);
     setError(null);
+    hasStartedPlayingRef.current = false;
+    stallTimestampsRef.current = [];
 
     getPlaybackInfo(session, item, quality, {
       audioStreamIndex: selectedAudioIndex,
       burnInSubtitleIndex: burnInSubIndex,
+      forceHls,
+      bypassCache: retryNonce > 0,
     })
       .then((info) => {
         if (active) setPlayback(info);
@@ -323,9 +380,9 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
     return () => {
       active = false;
     };
-  }, [session, item, quality, selectedAudioIndex, burnInSubIndex, retryNonce]);
+  }, [session, item, quality, selectedAudioIndex, burnInSubIndex, forceHls, retryNonce]);
 
-  // Attach HLS.js (with resilient mobile 5G auto-recovery & direct startPosition) or native video source
+  // Attach HLS.js (instant Netflix-style startup, deep mobile buffer cushion & real-time ABR) or native video source
   useEffect(() => {
     if (!playback || !videoRef.current) return;
     const video = videoRef.current;
@@ -333,8 +390,13 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
     let manifestParsed = false;
     let networkRetries = 0;
     let mediaRetries = 0;
+    let loadedFrags = 0;
+    let ewmaMbps: number | null = null;
     let retryTimer: number | null = null;
     let cleanupNative: (() => void) | null = null;
+
+    const currentPresetBitrateMbps =
+      (QUALITY_OPTIONS.find((q) => q.id === qualityRef.current)?.videoBitrate ?? 8_000_000) / 1_000_000;
 
     const initialSeekTarget =
       resumeOverrideRef.current !== null
@@ -376,17 +438,23 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
       hls = new Hls({
         enableWorker: true,
         lowLatencyMode: false,
+        // Stream bytes progressively into MSE & prefetch segment 0 immediately for instant startup
+        progressive: true,
+        startFragPrefetch: true,
         startPosition: initialSeekTarget > 0 ? initialSeekTarget : -1,
-        maxBufferLength: 30,
-        maxMaxBufferLength: 90,
-        backBufferLength: 30,
+        // Deep forward buffer cushion absorbs 5G dips, tower handoffs, and transcode jitter with zero pauses
+        maxBufferLength: 60,
+        maxMaxBufferLength: 180,
+        maxBufferSize: 120 * 1000 * 1000,
+        backBufferLength: 20,
         maxBufferHole: 1.5,
-        maxStarvationDelay: 6,
+        highBufferWatchdogPeriod: 2,
+        maxStarvationDelay: 4,
         nudgeOffset: 0.25,
         nudgeMaxRetry: 12,
-        fragLoadingTimeOut: 30_000,
+        fragLoadingTimeOut: 25_000,
         manifestLoadingTimeOut: 15_000,
-        levelLoadingTimeOut: 20_000,
+        levelLoadingTimeOut: 15_000,
         fragLoadingMaxRetry: 4,
         manifestLoadingMaxRetry: 2,
         levelLoadingMaxRetry: 2,
@@ -396,6 +464,28 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
       hls.on(Hls.Events.MANIFEST_PARSED, () => {
         manifestParsed = true;
         startPlayback();
+      });
+      hls.on(Hls.Events.FRAG_LOADED, (_ev, data) => {
+        const stats = data.frag?.stats;
+        if (!stats) return;
+        const bytes = stats.loaded || 0;
+        const ms = (stats.loading?.end || 0) - (stats.loading?.start || 0);
+        if (bytes >= 25_000 && ms >= 15) {
+          const sampleMbps = (bytes * 8) / (ms / 1000) / 1_000_000;
+          recordMeasuredThroughput(sampleMbps);
+          ewmaMbps = ewmaMbps !== null ? ewmaMbps * 0.65 + sampleMbps * 0.35 : sampleMbps;
+          loadedFrags += 1;
+
+          // Proactive ABR: if sustained download throughput falls below stream bitrate,
+          // step down BEFORE the buffer runs empty (Netflix-style zero-buffering adaptation)
+          if (
+            loadedFrags >= 3 &&
+            hasStartedPlayingRef.current &&
+            ewmaMbps < currentPresetBitrateMbps * 0.92
+          ) {
+            stepDownQuality('optimizing for network speed');
+          }
+        }
       });
       hls.on(Hls.Events.FRAG_BUFFERED, () => {
         networkRetries = 0;
@@ -407,6 +497,16 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
         if (!data.fatal) {
           if (data.details === Hls.ErrorDetails.BUFFER_STALLED_ERROR) {
             setBuffering(true);
+            if (hasStartedPlayingRef.current) {
+              const now = Date.now();
+              stallTimestampsRef.current = [
+                ...stallTimestampsRef.current.filter((t) => now - t < 40_000),
+                now,
+              ];
+              if (stallTimestampsRef.current.length >= 2) {
+                stepDownQuality('preventing buffering');
+              }
+            }
           }
           return;
         }
@@ -461,6 +561,8 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
     } else {
       hlsRef.current = null;
       const onNativeError = () => {
+        // If Direct Play fails on mobile, try stepping down to HLS automatically first
+        if (stepDownQuality('switching to adaptive stream')) return;
         setError('Could not load this stream directly. Tap Retry or try another quality.');
         setLoading(false);
         setBuffering(false);
@@ -496,11 +598,11 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
       if (hls) hls.destroy();
       if (cleanupNative) cleanupNative();
     };
-  }, [playback, session, item]);
+  }, [playback, session, item, stepDownQuality]);
 
   // Loading & stall recovery watchdog:
-  // - Surfaces quick Reconnect / quality-switch pills after 8s loading or 6s buffering so user is never trapped
-  // - Only nudges MSE when buffered data already exists (never aborts an in-flight first segment on 5G/ARM64!)
+  // - If buffering lasts > 4.5s mid-playback, automatically adapt down one quality tier before user waits
+  // - If already at lowest tier or manually locked, show Reconnect / quality pills & safely nudge MSE
   // - Hard timeout after 35s of initial loading so the player can never spin forever
   useEffect(() => {
     if ((!loading && !buffering) || error) {
@@ -510,9 +612,14 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
 
     const nudgeTimer = window.setTimeout(
       () => {
-        setSlowBuffering(true);
         const video = videoRef.current;
         const hls = hlsRef.current;
+        if (!loading && video && !video.paused && hasStartedPlayingRef.current) {
+          if (stepDownQuality('auto-adjusted for smooth playback')) {
+            return;
+          }
+        }
+        setSlowBuffering(true);
         if (!loading && video && hls && !video.paused && video.buffered.length > 0) {
           const nextPos = (video.currentTime || 0) + 0.3;
           video.currentTime = nextPos;
@@ -520,7 +627,7 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
           video.play().catch(() => {});
         }
       },
-      loading ? 8000 : 6000
+      loading ? 8000 : 4500
     );
 
     const hardLoadTimeout = loading
@@ -539,7 +646,7 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
       window.clearTimeout(nudgeTimer);
       if (hardLoadTimeout) window.clearTimeout(hardLoadTimeout);
     };
-  }, [buffering, loading, error]);
+  }, [buffering, loading, error, stepDownQuality]);
 
   // Sync progress with Jellyfin every 10s (uses TV's live progress while casting so paused local video never conflicts)
   useEffect(() => {
@@ -572,6 +679,19 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
     }, 10_000);
     return () => window.clearInterval(id);
   }, [playback, session, item]);
+
+  // Pre-warm Next Episode PlaybackInfo 35s before credits finish for instant binge transition
+  useEffect(() => {
+    if (!nextEpisode || nextPrefetchedIdRef.current === nextEpisode.id) return;
+    if (duration > 40 && currentTime > 0 && duration - currentTime <= 35) {
+      nextPrefetchedIdRef.current = nextEpisode.id;
+      prefetchPlaybackInfo(
+        session,
+        nextEpisode,
+        manualQualityLockedRef.current ? quality : getRecommendedQuality()
+      );
+    }
+  }, [currentTime, duration, nextEpisode, session, quality]);
 
   // Trigger Auto-Play Next Episode countdown when within final 15s
   useEffect(() => {
@@ -746,6 +866,8 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
   );
 
   const handleQualityChange = (nextQuality: QualityPreset) => {
+    manualQualityLockedRef.current = true;
+    setForceHls(false);
     if (nextQuality === quality) {
       setShowQualityMenu(false);
       return;
@@ -997,11 +1119,24 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
         onDurationChange={() => setDuration(videoRef.current?.duration || 0)}
         onPlay={() => setPlaying(true)}
         onPlaying={() => {
+          hasStartedPlayingRef.current = true;
           setPlaying(true);
           setBuffering(false);
           setLoading(false);
         }}
-        onWaiting={() => setBuffering(true)}
+        onWaiting={() => {
+          setBuffering(true);
+          if (hasStartedPlayingRef.current) {
+            const now = Date.now();
+            stallTimestampsRef.current = [
+              ...stallTimestampsRef.current.filter((t) => now - t < 40_000),
+              now,
+            ];
+            if (stallTimestampsRef.current.length >= 2) {
+              stepDownQuality('preventing buffering');
+            }
+          }
+        }}
         onCanPlay={() => setBuffering(false)}
         onPause={() => {
           setPlaying(false);
@@ -1013,6 +1148,7 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
           }
         }}
         crossOrigin="anonymous"
+        preload="auto"
         playsInline
         style={{
           filter: brightness !== 1 ? `brightness(${brightness})` : undefined,
@@ -1126,6 +1262,13 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
         </div>
       )}
 
+      {/* Transient Adaptive Quality Notice */}
+      {adaptiveNotice && !showBrightnessHud && (
+        <div className="pointer-events-none absolute top-20 left-1/2 z-30 max-w-[90vw] -translate-x-1/2 truncate rounded-full border border-violet-400/35 bg-black/80 px-4 py-2 text-xs font-semibold text-zinc-100 shadow-xl backdrop-blur-md">
+          {adaptiveNotice}
+        </div>
+      )}
+
       {/* Loading / Buffering Spinner */}
       {(loading || buffering) && !error && (
         <div className="pointer-events-none absolute inset-0 z-10 flex flex-col items-center justify-center bg-black/40 px-4">
@@ -1156,7 +1299,7 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
                   Try Original
                 </button>
               )}
-              {quality !== '720p' && (
+              {quality !== '720p' && quality !== '480p' && quality !== '360p' && (
                 <button
                   onClick={(e) => {
                     e.stopPropagation();
@@ -1176,6 +1319,17 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
                   className="rounded-xl bg-violet-600 px-3.5 py-2 text-xs font-bold text-white shadow-lg hover:bg-violet-500"
                 >
                   Switch to 480p
+                </button>
+              )}
+              {quality === '480p' && (
+                <button
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    handleQualityChange('360p');
+                  }}
+                  className="rounded-xl bg-violet-600 px-3.5 py-2 text-xs font-bold text-white shadow-lg hover:bg-violet-500"
+                >
+                  Switch to 360p
                 </button>
               )}
             </div>
