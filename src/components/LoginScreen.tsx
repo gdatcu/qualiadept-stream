@@ -301,9 +301,18 @@ export const LoginScreen: React.FC<LoginScreenProps> = ({
                 <div className="relative">
                   <User className="pointer-events-none absolute left-3.5 top-1/2 h-4 w-4 -translate-y-1/2 text-zinc-500" />
                   <input
+                    id="qs-login-username"
                     type="text"
                     value={username}
                     onChange={(e) => setUsername(e.target.value)}
+                    onKeyDown={(e) => {
+                      if (e.key === 'Enter') {
+                        e.preventDefault();
+                        if (username.trim()) {
+                          document.getElementById('qs-login-password')?.focus();
+                        }
+                      }
+                    }}
                     placeholder="Enter your family username"
                     autoCapitalize="none"
                     autoCorrect="off"
@@ -321,6 +330,7 @@ export const LoginScreen: React.FC<LoginScreenProps> = ({
                 <div className="relative">
                   <Lock className="pointer-events-none absolute left-3.5 top-1/2 h-4 w-4 -translate-y-1/2 text-zinc-500" />
                   <input
+                    id="qs-login-password"
                     type={showPassword ? 'text' : 'password'}
                     value={password}
                     onChange={(e) => setPassword(e.target.value)}

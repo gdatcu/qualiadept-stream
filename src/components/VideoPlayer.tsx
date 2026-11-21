@@ -60,6 +60,7 @@ import {
   recordStableCeiling,
   subscribeNetworkChange,
 } from '../utils/network';
+import { isTizenTv } from '../utils/tvNavigation';
 
 interface VideoPlayerProps {
   session: AuthSession;
@@ -118,6 +119,9 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
   const videoRef = useRef<HTMLVideoElement>(null);
   const hlsRef = useRef<Hls | null>(null);
   const brightnessTrackRef = useRef<HTMLDivElement>(null);
+  const centerPlayBtnRef = useRef<HTMLButtonElement>(null);
+  const backBtnRef = useRef<HTMLButtonElement>(null);
+  const isTv = isTizenTv();
   const resumeOverrideRef = useRef<number | null>(null);
   const swipeStartRef = useRef<{ y: number; startBrightness: number; moved: boolean } | null>(null);
   const brightnessHudTimerRef = useRef<number | null>(null);
@@ -1104,23 +1108,63 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
     bumpControls();
   }, [bumpControls]);
 
-  // Keyboard & Samsung Smart TV remote shortcuts
+  const showControlsRef = useRef(showControls);
+  showControlsRef.current = showControls;
+
+  // Auto-focus inside Quality / Subtitles menus when opened on TV
+  useEffect(() => {
+    if (!showSubMenu && !showQualityMenu) return;
+    const raf = window.requestAnimationFrame(() => {
+      const firstMenuBtn = document.querySelector(
+        '[data-tv-player-menu="true"] button:not([disabled])'
+      ) as HTMLElement | null;
+      firstMenuBtn?.focus();
+    });
+    return () => window.cancelAnimationFrame(raf);
+  }, [showSubMenu, showQualityMenu]);
+
+  // Auto-focus Play/Pause (or Back while loading) when controls wake on TV
+  useEffect(() => {
+    if (!isTv || !showControls || showSubMenu || showQualityMenu) return;
+    const raf = window.requestAnimationFrame(() => {
+      const active = document.activeElement as HTMLElement | null;
+      const inPlayer = active && containerRef.current?.contains(active) && active !== containerRef.current;
+      if (!inPlayer) {
+        (centerPlayBtnRef.current || backBtnRef.current)?.focus();
+      }
+    });
+    return () => window.cancelAnimationFrame(raf);
+  }, [isTv, showControls, showSubMenu, showQualityMenu, loading, buffering]);
+
+  // Keyboard & Samsung Smart TV SolarCell remote shortcuts
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       const video = videoRef.current;
       if (!video) return;
 
-      if (e.key === 'Escape' || e.keyCode === 10009 || e.key === 'XF86Back') {
+      const isBackKey = e.key === 'Escape' || e.keyCode === 10009 || e.key === 'XF86Back';
+      if (isBackKey) {
         e.preventDefault();
         if (showSubMenu || showQualityMenu) {
           setShowSubMenu(false);
           setShowQualityMenu(false);
+          bumpControls();
+          window.requestAnimationFrame(() => {
+            (centerPlayBtnRef.current || backBtnRef.current)?.focus();
+          });
         } else if (document.fullscreenElement) {
           document.exitFullscreen().catch(() => {});
         } else {
           onClose();
         }
-      } else if (
+        return;
+      }
+
+      // Keep controls alive whenever the user interacts with the remote/keyboard
+      const controlsWereVisible = showControlsRef.current;
+      bumpControls();
+
+      if (
         e.key === ' ' ||
         e.key === 'k' ||
         e.key === 'MediaPlayPause' ||
@@ -1139,12 +1183,58 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
       } else if (e.key === 'MediaStop' || e.keyCode === 413) {
         e.preventDefault();
         onClose();
-      } else if (e.key === 'ArrowRight' || e.key === 'MediaFastForward' || e.keyCode === 417) {
+      } else if (e.key === 'MediaFastForward' || e.keyCode === 417) {
         e.preventDefault();
-        seekBy(10);
-      } else if (e.key === 'ArrowLeft' || e.key === 'MediaRewind' || e.keyCode === 412) {
+        seekBy(15);
+      } else if (e.key === 'MediaRewind' || e.keyCode === 412) {
         e.preventDefault();
-        seekBy(-10);
+        seekBy(-15);
+      } else if (e.key === 'Enter' || e.keyCode === 13) {
+        if (!controlsWereVisible && !showSubMenu && !showQualityMenu) {
+          // First Center/OK press while HUD is hidden: wake HUD & focus Play/Pause
+          e.preventDefault();
+          window.requestAnimationFrame(() => {
+            (centerPlayBtnRef.current || backBtnRef.current)?.focus();
+          });
+        } else {
+          // If HUD is visible and nothing clickable is focused yet, toggle play/pause cleanly
+          const active = document.activeElement as HTMLElement | null;
+          const isInteractiveFocused = Boolean(
+            active &&
+              containerRef.current?.contains(active) &&
+              (active.tagName === 'BUTTON' ||
+                active.tagName === 'INPUT' ||
+                active.tagName === 'A' ||
+                active.tagName === 'SELECT')
+          );
+          if (!isInteractiveFocused) {
+            e.preventDefault();
+            togglePlay();
+            window.requestAnimationFrame(() => {
+              (centerPlayBtnRef.current || backBtnRef.current)?.focus();
+            });
+          }
+        }
+      } else if (
+        !controlsWereVisible &&
+        !showSubMenu &&
+        !showQualityMenu &&
+        (e.key === 'ArrowRight' || e.key === 'ArrowLeft' || e.key === 'ArrowUp' || e.key === 'ArrowDown')
+      ) {
+        // When HUD is hidden: Left/Right quick-seeks ±10s, Up/Down wakes controls and focuses Back or Play/Pause
+        e.preventDefault();
+        if (e.key === 'ArrowRight') {
+          seekBy(10);
+        } else if (e.key === 'ArrowLeft') {
+          seekBy(-10);
+        }
+        window.requestAnimationFrame(() => {
+          const targetBtn =
+            e.key === 'ArrowUp'
+              ? backBtnRef.current || centerPlayBtnRef.current
+              : centerPlayBtnRef.current || backBtnRef.current;
+          targetBtn?.focus();
+        });
       } else if (e.key === 'm') {
         video.muted = !video.muted;
         setMuted(video.muted);
@@ -1156,7 +1246,17 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
     };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
-  }, [onClose, nextEpisode, onPlayNext, showSubMenu, showQualityMenu, togglePlay, seekBy, toggleFullscreen]);
+  }, [
+    onClose,
+    nextEpisode,
+    onPlayNext,
+    showSubMenu,
+    showQualityMenu,
+    togglePlay,
+    seekBy,
+    toggleFullscreen,
+    bumpControls,
+  ]);
 
   const loadOnChromecast = useCallback(
     async (overrides?: {
@@ -1465,6 +1565,7 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
     <div
       ref={containerRef}
       data-tv-player="true"
+      data-tv-controls-visible={showControls || isCasting ? 'true' : 'false'}
       data-tv-scope="modal"
       onMouseMove={bumpControls}
       className="fixed inset-0 z-50 flex h-[100dvh] w-screen flex-col overflow-hidden bg-black select-none"
@@ -1558,6 +1659,8 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
             <RotateCcw className="h-6 w-6" />
           </button>
           <button
+            ref={centerPlayBtnRef}
+            data-tv-default-focus="true"
             onClick={(e) => {
               e.stopPropagation();
               togglePlay();
@@ -1584,56 +1687,58 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
         </div>
       )}
 
-      {/* Netflix-style Left Brightness Vertical Slider (hidden during loading/buffering so portrait action buttons never overlap) */}
-      <div
-        className={`absolute left-3 top-1/2 z-20 -translate-y-1/2 flex flex-col items-center gap-2 rounded-2xl border border-white/15 bg-black/55 px-2 py-3 backdrop-blur-md transition-opacity duration-300 sm:left-5 ${
-          (isDraggingBrightness || (showControls && !loading && !buffering)) &&
-          !error &&
-          !castDeviceName &&
-          !showSubMenu &&
-          !showQualityMenu
-            ? 'opacity-100'
-            : 'opacity-0 pointer-events-none'
-        }`}
-        onClick={(e) => e.stopPropagation()}
-      >
-        <Sun className="h-4 w-4 text-amber-300" />
+      {/* Netflix-style Left Brightness Vertical Slider (hidden on Samsung TV & during loading/buffering) */}
+      {!isTv && (
         <div
-          ref={brightnessTrackRef}
-          role="slider"
-          aria-label="Brightness"
-          aria-valuemin={Math.round(MIN_BRIGHTNESS * 100)}
-          aria-valuemax={Math.round(MAX_BRIGHTNESS * 100)}
-          aria-valuenow={brightnessPct}
-          onPointerDown={(e) => {
-            e.stopPropagation();
-            e.currentTarget.setPointerCapture(e.pointerId);
-            setIsDraggingBrightness(true);
-            applyBrightnessFromClientY(e.clientY);
-          }}
-          onPointerMove={(e) => {
-            if (!isDraggingBrightness) return;
-            applyBrightnessFromClientY(e.clientY);
-          }}
-          onPointerUp={() => setIsDraggingBrightness(false)}
-          onPointerCancel={() => setIsDraggingBrightness(false)}
-          className="relative h-28 w-5 cursor-pointer touch-none flex items-center justify-center sm:h-36"
+          className={`absolute left-3 top-1/2 z-20 -translate-y-1/2 flex flex-col items-center gap-2 rounded-2xl border border-white/15 bg-black/55 px-2 py-3 backdrop-blur-md transition-opacity duration-300 sm:left-5 ${
+            (isDraggingBrightness || (showControls && !loading && !buffering)) &&
+            !error &&
+            !castDeviceName &&
+            !showSubMenu &&
+            !showQualityMenu
+              ? 'opacity-100'
+              : 'opacity-0 pointer-events-none'
+          }`}
+          onClick={(e) => e.stopPropagation()}
         >
-          <div className="relative h-full w-1.5 overflow-hidden rounded-full bg-white/25">
+          <Sun className="h-4 w-4 text-amber-300" />
+          <div
+            ref={brightnessTrackRef}
+            role="slider"
+            aria-label="Brightness"
+            aria-valuemin={Math.round(MIN_BRIGHTNESS * 100)}
+            aria-valuemax={Math.round(MAX_BRIGHTNESS * 100)}
+            aria-valuenow={brightnessPct}
+            onPointerDown={(e) => {
+              e.stopPropagation();
+              e.currentTarget.setPointerCapture(e.pointerId);
+              setIsDraggingBrightness(true);
+              applyBrightnessFromClientY(e.clientY);
+            }}
+            onPointerMove={(e) => {
+              if (!isDraggingBrightness) return;
+              applyBrightnessFromClientY(e.clientY);
+            }}
+            onPointerUp={() => setIsDraggingBrightness(false)}
+            onPointerCancel={() => setIsDraggingBrightness(false)}
+            className="relative h-28 w-5 cursor-pointer touch-none flex items-center justify-center sm:h-36"
+          >
+            <div className="relative h-full w-1.5 overflow-hidden rounded-full bg-white/25">
+              <div
+                className="absolute bottom-0 left-0 right-0 rounded-full bg-gradient-to-t from-violet-500 to-amber-300"
+                style={{ height: `${brightnessFillPct}%` }}
+              />
+            </div>
             <div
-              className="absolute bottom-0 left-0 right-0 rounded-full bg-gradient-to-t from-violet-500 to-amber-300"
-              style={{ height: `${brightnessFillPct}%` }}
+              className="pointer-events-none absolute left-1/2 h-3.5 w-3.5 -translate-x-1/2 translate-y-1/2 rounded-full bg-white shadow-md"
+              style={{ bottom: `${brightnessFillPct}%` }}
             />
           </div>
-          <div
-            className="pointer-events-none absolute left-1/2 h-3.5 w-3.5 -translate-x-1/2 translate-y-1/2 rounded-full bg-white shadow-md"
-            style={{ bottom: `${brightnessFillPct}%` }}
-          />
+          <span className="text-[10px] font-bold tabular-nums text-zinc-200">
+            {brightnessPct}%
+          </span>
         </div>
-        <span className="text-[10px] font-bold tabular-nums text-zinc-200">
-          {brightnessPct}%
-        </span>
-      </div>
+      )}
 
       {/* Transient Brightness HUD (shown when swiping on left edge) */}
       {showBrightnessHud && (
@@ -1905,6 +2010,7 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
         }`}
       >
         <button
+          ref={backBtnRef}
           onClick={onClose}
           className="flex flex-shrink-0 items-center gap-2 rounded-xl bg-white/10 px-3 py-2 text-xs sm:text-sm font-semibold text-white backdrop-blur-md transition hover:bg-white/20 focus:outline-none focus:ring-4 focus:ring-violet-400"
         >
@@ -1946,9 +2052,19 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
           </span>
           <input
             type="range"
+            aria-label="Seek timeline"
             min={0}
             max={displayDuration || 100}
             value={displayCurrentTime}
+            onKeyDown={(e) => {
+              if (e.key === 'ArrowRight') {
+                e.preventDefault();
+                seekBy(15);
+              } else if (e.key === 'ArrowLeft') {
+                e.preventDefault();
+                seekBy(-15);
+              }
+            }}
             onChange={(e) => {
               const val = Number(e.target.value);
               if (isCasting) {
@@ -2008,53 +2124,55 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
               </button>
             )}
 
-            {/* Volume */}
-            <div className="flex items-center gap-1.5">
-              <button
-                onClick={() => {
-                  if (isCasting) {
-                    toggleChromecastMute();
+            {/* Volume (hidden on Samsung TV where remote hardware Volume +/- controls TV volume) */}
+            {!isTv && (
+              <div className="flex items-center gap-1.5">
+                <button
+                  onClick={() => {
+                    if (isCasting) {
+                      toggleChromecastMute();
+                      bumpControls();
+                      return;
+                    }
+                    if (!videoRef.current) return;
+                    videoRef.current.muted = !muted;
+                    setMuted(!muted);
                     bumpControls();
-                    return;
-                  }
-                  if (!videoRef.current) return;
-                  videoRef.current.muted = !muted;
-                  setMuted(!muted);
-                  bumpControls();
-                }}
-                aria-label={displayMuted ? 'Unmute' : 'Mute'}
-                className="rounded-lg p-1.5 sm:p-2 text-zinc-200 transition hover:bg-white/10 focus:outline-none focus:ring-2 focus:ring-violet-400"
-              >
-                {displayMuted || displayVolume === 0 ? (
-                  <VolumeX className="h-4 w-4 sm:h-5 sm:w-5" />
-                ) : (
-                  <Volume2 className="h-4 w-4 sm:h-5 sm:w-5" />
-                )}
-              </button>
-              <input
-                type="range"
-                min={0}
-                max={1}
-                step={0.05}
-                value={displayMuted ? 0 : displayVolume}
-                onChange={(e) => {
-                  const v = Number(e.target.value);
-                  if (isCasting) {
-                    setChromecastVolume(v);
+                  }}
+                  aria-label={displayMuted ? 'Unmute' : 'Mute'}
+                  className="rounded-lg p-1.5 sm:p-2 text-zinc-200 transition hover:bg-white/10 focus:outline-none focus:ring-2 focus:ring-violet-400"
+                >
+                  {displayMuted || displayVolume === 0 ? (
+                    <VolumeX className="h-4 w-4 sm:h-5 sm:w-5" />
+                  ) : (
+                    <Volume2 className="h-4 w-4 sm:h-5 sm:w-5" />
+                  )}
+                </button>
+                <input
+                  type="range"
+                  min={0}
+                  max={1}
+                  step={0.05}
+                  value={displayMuted ? 0 : displayVolume}
+                  onChange={(e) => {
+                    const v = Number(e.target.value);
+                    if (isCasting) {
+                      setChromecastVolume(v);
+                      bumpControls();
+                      return;
+                    }
+                    setVolume(v);
+                    setMuted(v === 0);
+                    if (videoRef.current) {
+                      videoRef.current.volume = v;
+                      videoRef.current.muted = v === 0;
+                    }
                     bumpControls();
-                    return;
-                  }
-                  setVolume(v);
-                  setMuted(v === 0);
-                  if (videoRef.current) {
-                    videoRef.current.volume = v;
-                    videoRef.current.muted = v === 0;
-                  }
-                  bumpControls();
-                }}
-                className="hidden md:block w-20 h-1 cursor-pointer accent-violet-500"
-              />
-            </div>
+                  }}
+                  className="hidden md:block w-20 h-1 cursor-pointer accent-violet-500"
+                />
+              </div>
+            )}
           </div>
 
           <div className="relative flex items-center gap-1 sm:gap-2 flex-shrink-0">
@@ -2291,34 +2409,38 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
               </div>
             )}
 
-            {/* Chromecast / AirPlay Button */}
-            <button
-              onClick={handleCastClick}
-              title={
-                castDeviceName
-                  ? `Casting to ${castDeviceName} (click to stop)`
-                  : castAvailable
-                  ? 'Cast to Chromecast / TV'
-                  : 'Cast to TV (Chrome / Edge / Safari AirPlay)'
-              }
-              className={`rounded-lg p-1.5 sm:p-2 transition hover:bg-white/10 focus:outline-none focus:ring-2 focus:ring-violet-400 ${
-                castDeviceName ? 'text-violet-400 bg-violet-500/20' : 'text-zinc-200'
-              }`}
-            >
-              <Cast className="h-4 w-4 sm:h-5 sm:w-5" />
-            </button>
+            {/* Chromecast / AirPlay & Fullscreen Buttons (hidden on Samsung TV which is already native fullscreen) */}
+            {!isTv && (
+              <>
+                <button
+                  onClick={handleCastClick}
+                  title={
+                    castDeviceName
+                      ? `Casting to ${castDeviceName} (click to stop)`
+                      : castAvailable
+                      ? 'Cast to Chromecast / TV'
+                      : 'Cast to TV (Chrome / Edge / Safari AirPlay)'
+                  }
+                  className={`rounded-lg p-1.5 sm:p-2 transition hover:bg-white/10 focus:outline-none focus:ring-2 focus:ring-violet-400 ${
+                    castDeviceName ? 'text-violet-400 bg-violet-500/20' : 'text-zinc-200'
+                  }`}
+                >
+                  <Cast className="h-4 w-4 sm:h-5 sm:w-5" />
+                </button>
 
-            <button
-              onClick={toggleFullscreen}
-              aria-label={isFullscreen ? 'Exit fullscreen' : 'Fullscreen'}
-              className="rounded-lg p-1.5 sm:p-2 text-zinc-200 transition hover:bg-white/10 focus:outline-none focus:ring-2 focus:ring-violet-400"
-            >
-              {isFullscreen ? (
-                <Minimize className="h-4 w-4 sm:h-5 sm:w-5" />
-              ) : (
-                <Maximize className="h-4 w-4 sm:h-5 sm:w-5" />
-              )}
-            </button>
+                <button
+                  onClick={toggleFullscreen}
+                  aria-label={isFullscreen ? 'Exit fullscreen' : 'Fullscreen'}
+                  className="rounded-lg p-1.5 sm:p-2 text-zinc-200 transition hover:bg-white/10 focus:outline-none focus:ring-2 focus:ring-violet-400"
+                >
+                  {isFullscreen ? (
+                    <Minimize className="h-4 w-4 sm:h-5 sm:w-5" />
+                  ) : (
+                    <Maximize className="h-4 w-4 sm:h-5 sm:w-5" />
+                  )}
+                </button>
+              </>
+            )}
           </div>
         </div>
       </div>
