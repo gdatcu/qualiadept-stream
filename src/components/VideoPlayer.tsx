@@ -300,8 +300,10 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
   // Fetch stream URL, audio & subtitle tracks whenever item, quality, audio, burn-in subtitle, or retry changes
   useEffect(() => {
     let active = true;
+    setPlayback(null);
     setLoading(true);
     setBuffering(false);
+    setSlowBuffering(false);
     setError(null);
 
     getPlaybackInfo(session, item, quality, {
@@ -328,9 +330,11 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
     if (!playback || !videoRef.current) return;
     const video = videoRef.current;
     let hls: Hls | null = null;
+    let manifestParsed = false;
     let networkRetries = 0;
     let mediaRetries = 0;
     let retryTimer: number | null = null;
+    let cleanupNative: (() => void) | null = null;
 
     const initialSeekTarget =
       resumeOverrideRef.current !== null
@@ -368,29 +372,34 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
     };
 
     if (playback.isHls && Hls.isSupported()) {
+      video.removeAttribute('src');
       hls = new Hls({
         enableWorker: true,
         lowLatencyMode: false,
         startPosition: initialSeekTarget > 0 ? initialSeekTarget : -1,
         maxBufferLength: 30,
         maxMaxBufferLength: 90,
+        backBufferLength: 30,
         maxBufferHole: 1.5,
         maxStarvationDelay: 6,
         nudgeOffset: 0.25,
         nudgeMaxRetry: 12,
         fragLoadingTimeOut: 30_000,
-        manifestLoadingTimeOut: 20_000,
+        manifestLoadingTimeOut: 15_000,
         levelLoadingTimeOut: 20_000,
-        fragLoadingMaxRetry: 6,
-        manifestLoadingMaxRetry: 4,
-        levelLoadingMaxRetry: 4,
+        fragLoadingMaxRetry: 4,
+        manifestLoadingMaxRetry: 2,
+        levelLoadingMaxRetry: 2,
       });
       hlsRef.current = hls;
-      hls.loadSource(playback.streamUrl);
-      hls.attachMedia(video);
-      hls.on(Hls.Events.MANIFEST_PARSED, startPlayback);
+
+      hls.on(Hls.Events.MANIFEST_PARSED, () => {
+        manifestParsed = true;
+        startPlayback();
+      });
       hls.on(Hls.Events.FRAG_BUFFERED, () => {
         networkRetries = 0;
+        setLoading(false);
         setBuffering(false);
         setSlowBuffering(false);
       });
@@ -402,33 +411,72 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
           return;
         }
 
-        // Auto-recover from transient 5G / transcoding stalls before showing an error screen
-        if (data.type === Hls.ErrorTypes.NETWORK_ERROR && networkRetries < 4) {
+        const httpCode = data.response?.code;
+        const isClientHttpError =
+          typeof httpCode === 'number' &&
+          httpCode >= 400 &&
+          httpCode < 500 &&
+          httpCode !== 408 &&
+          httpCode !== 429;
+
+        // Auto-recover from transient 5G / transcoding stalls before showing an error screen.
+        // Crucial: MANIFEST_* failures MUST call loadSource() — startLoad() silently stops hls.js!
+        if (data.type === Hls.ErrorTypes.NETWORK_ERROR && !isClientHttpError && networkRetries < 3) {
           networkRetries += 1;
           setBuffering(true);
+          const isManifestErr =
+            !manifestParsed ||
+            data.details === Hls.ErrorDetails.MANIFEST_LOAD_ERROR ||
+            data.details === Hls.ErrorDetails.MANIFEST_LOAD_TIMEOUT ||
+            data.details === Hls.ErrorDetails.MANIFEST_PARSING_ERROR;
           retryTimer = window.setTimeout(() => {
-            hls?.startLoad(video.currentTime || initialSeekTarget || -1);
-          }, 800 * networkRetries);
+            if (!hls) return;
+            if (isManifestErr) {
+              hls.loadSource(playback.streamUrl);
+            } else {
+              hls.startLoad(video.currentTime || initialSeekTarget || -1);
+            }
+          }, 1000 * networkRetries);
           return;
         }
 
-        if (data.type === Hls.ErrorTypes.MEDIA_ERROR && mediaRetries < 3) {
+        if (data.type === Hls.ErrorTypes.MEDIA_ERROR && mediaRetries < 2) {
           mediaRetries += 1;
           setBuffering(true);
           hls?.recoverMediaError();
           return;
         }
 
-        setError(`Stream interrupted (${data.details}). Tap Retry or try a lower quality.`);
+        setError(
+          `Stream interrupted (${data.details}${httpCode ? ` · HTTP ${httpCode}` : ''}). Tap Retry or try another quality.`
+        );
         setLoading(false);
         setBuffering(false);
         setSlowBuffering(false);
         setShowControls(true);
       });
+
+      hls.attachMedia(video);
+      hls.loadSource(playback.streamUrl);
     } else {
       hlsRef.current = null;
+      const onNativeError = () => {
+        setError('Could not load this stream directly. Tap Retry or try another quality.');
+        setLoading(false);
+        setBuffering(false);
+        setSlowBuffering(false);
+        setShowControls(true);
+      };
       video.src = playback.streamUrl;
       video.addEventListener('loadedmetadata', startPlayback, { once: true });
+      video.addEventListener('error', onNativeError, { once: true });
+      cleanupNative = () => {
+        video.removeEventListener('loadedmetadata', startPlayback);
+        video.removeEventListener('error', onNativeError);
+        video.pause();
+        video.removeAttribute('src');
+        video.load();
+      };
     }
 
     return () => {
@@ -446,29 +494,51 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
         );
       }
       if (hls) hls.destroy();
+      if (cleanupNative) cleanupNative();
     };
   }, [playback, session, item]);
 
-  // Stall recovery watchdog: if stuck buffering on mobile data > 5s, nudge MSE decoder & offer quick 720p/Retry pill
+  // Loading & stall recovery watchdog:
+  // - Surfaces quick Reconnect / quality-switch pills after 8s loading or 6s buffering so user is never trapped
+  // - Only nudges MSE when buffered data already exists (never aborts an in-flight first segment on 5G/ARM64!)
+  // - Hard timeout after 35s of initial loading so the player can never spin forever
   useEffect(() => {
-    if (!buffering || loading || error) {
+    if ((!loading && !buffering) || error) {
       setSlowBuffering(false);
       return;
     }
 
-    const nudgeTimer = window.setTimeout(() => {
-      setSlowBuffering(true);
-      const video = videoRef.current;
-      const hls = hlsRef.current;
-      if (video && hls && !video.paused) {
-        const nextPos = (video.currentTime || 0) + 0.3;
-        video.currentTime = nextPos;
-        hls.startLoad(nextPos);
-        video.play().catch(() => {});
-      }
-    }, 5000);
+    const nudgeTimer = window.setTimeout(
+      () => {
+        setSlowBuffering(true);
+        const video = videoRef.current;
+        const hls = hlsRef.current;
+        if (!loading && video && hls && !video.paused && video.buffered.length > 0) {
+          const nextPos = (video.currentTime || 0) + 0.3;
+          video.currentTime = nextPos;
+          hls.startLoad(nextPos);
+          video.play().catch(() => {});
+        }
+      },
+      loading ? 8000 : 6000
+    );
 
-    return () => window.clearTimeout(nudgeTimer);
+    const hardLoadTimeout = loading
+      ? window.setTimeout(() => {
+          setError(
+            'Stream is taking too long to start on this connection. Tap Retry or switch quality.'
+          );
+          setLoading(false);
+          setBuffering(false);
+          setSlowBuffering(false);
+          setShowControls(true);
+        }, 35_000)
+      : null;
+
+    return () => {
+      window.clearTimeout(nudgeTimer);
+      if (hardLoadTimeout) window.clearTimeout(hardLoadTimeout);
+    };
   }, [buffering, loading, error]);
 
   // Sync progress with Jellyfin every 10s (uses TV's live progress while casting so paused local video never conflicts)
@@ -1075,6 +1145,17 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
                 <RefreshCw className="h-3.5 w-3.5" />
                 Reconnect
               </button>
+              {quality !== 'auto' && (
+                <button
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    handleQualityChange('auto');
+                  }}
+                  className="rounded-xl border border-white/20 bg-white/15 px-3.5 py-2 text-xs font-bold text-white shadow-lg backdrop-blur-md hover:bg-white/25"
+                >
+                  Try Original
+                </button>
+              )}
               {quality !== '720p' && (
                 <button
                   onClick={(e) => {
@@ -1114,12 +1195,27 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
               <RefreshCw className="h-4 w-4" />
               Retry
             </button>
-            {quality !== '720p' && (
+            {quality !== 'auto' && (
+              <button
+                onClick={() => handleQualityChange('auto')}
+                className="rounded-xl bg-violet-600 px-5 py-2.5 text-sm font-bold text-white hover:bg-violet-500 focus:outline-none focus:ring-4 focus:ring-violet-400"
+              >
+                Try Original
+              </button>
+            )}
+            {quality !== '720p' ? (
               <button
                 onClick={() => handleQualityChange('720p')}
                 className="rounded-xl bg-violet-600 px-5 py-2.5 text-sm font-bold text-white hover:bg-violet-500 focus:outline-none focus:ring-4 focus:ring-violet-400"
               >
                 Try 720p
+              </button>
+            ) : (
+              <button
+                onClick={() => handleQualityChange('480p')}
+                className="rounded-xl border border-white/20 bg-white/10 px-5 py-2.5 text-sm font-bold text-white hover:bg-white/20 focus:outline-none focus:ring-4 focus:ring-violet-400"
+              >
+                Try 480p
               </button>
             )}
             <button

@@ -374,6 +374,9 @@ interface RawMediaStream {
   Title?: string;
   Codec?: string;
   Channels?: number;
+  Width?: number;
+  Height?: number;
+  BitRate?: number;
   IsDefault?: boolean;
   IsForced?: boolean;
   IsTextSubtitleStream?: boolean;
@@ -422,23 +425,44 @@ export async function getPlaybackInfo(
   const preset = QUALITY_OPTIONS.find((q) => q.id === quality) || QUALITY_OPTIONS[0];
   const needsBurnIn = options.burnInSubtitleIndex !== undefined && options.burnInSubtitleIndex !== null;
   const hasExplicitAudio = options.audioStreamIndex !== undefined && options.audioStreamIndex !== null;
-  const forceTranscode = quality !== 'auto' || needsBurnIn;
   const maxBitrate = preset.videoBitrate ?? 40_000_000;
+  const allowDirectPlay = !needsBurnIn && !hasExplicitAudio;
 
   const playbackBody: Record<string, unknown> = {
+    MaxStreamingBitrate: maxBitrate,
+    EnableDirectPlay: allowDirectPlay,
+    EnableDirectStream: allowDirectPlay,
+    EnableTranscoding: true,
+    AllowVideoStreamCopy: true,
+    AllowAudioStreamCopy: true,
     DeviceProfile: {
       MaxStreamingBitrate: maxBitrate,
-      DirectPlayProfiles:
-        forceTranscode || hasExplicitAudio
-          ? []
-          : [
-              {
-                Container: 'mp4,m4v,webm',
-                Type: 'Video',
-                VideoCodec: 'h264,vp9,av1',
-                AudioCodec: 'aac,mp3,opus',
-              },
-            ],
+      DirectPlayProfiles: allowDirectPlay
+        ? [
+            {
+              Container: 'mp4,m4v,webm',
+              Type: 'Video',
+              VideoCodec: 'h264,vp9,av1',
+              AudioCodec: 'aac,mp3,opus',
+            },
+          ]
+        : [],
+      CodecProfiles: preset.maxWidth
+        ? [
+            {
+              Type: 'Video',
+              Codec: 'h264,hevc,vp9,av1,mpeg4,mpeg2video',
+              Conditions: [
+                {
+                  Condition: 'LessThanEqual',
+                  Property: 'Width',
+                  Value: String(preset.maxWidth),
+                  IsRequired: false,
+                },
+              ],
+            },
+          ]
+        : [],
       TranscodingProfiles: [
         {
           Container: 'ts',
@@ -449,6 +473,8 @@ export async function getPlaybackInfo(
           Context: 'Streaming',
           MaxAudioChannels: '2',
           SegmentLength: 6,
+          MinSegments: 1,
+          BreakOnNonKeyFrames: true,
         },
       ],
       SubtitleProfiles: [
@@ -529,12 +555,23 @@ export async function getPlaybackInfo(
       };
     });
 
-  // Prefer Direct Play only in 'auto' mode for native browser MP4/WebM when no burn-in or custom audio track is needed
+  // Allow Direct Play whenever the native MP4/WebM source already fits within the selected quality cap
+  // (avoids unnecessary ARM64 CPU transcoding on 5G for SD/720p videos while still capping high-bitrate 1080p/4K).
+  const videoStream = streams.find((s) => s.Type === 'Video');
+  const sourceBitrate: number | undefined =
+    typeof source.Bitrate === 'number' ? source.Bitrate : videoStream?.BitRate;
+  const sourceWidth: number | undefined = videoStream?.Width;
+  const fitsSelectedQuality =
+    quality === 'auto' ||
+    ((!sourceBitrate || sourceBitrate <= maxBitrate) &&
+      (!preset.maxWidth || !sourceWidth || sourceWidth <= preset.maxWidth));
+
   const isNonDefaultAudio =
     hasExplicitAudio && defaultAudioIndex !== null && options.audioStreamIndex !== defaultAudioIndex;
   const canDirectPlay =
-    !forceTranscode &&
+    !needsBurnIn &&
     !isNonDefaultAudio &&
+    fitsSelectedQuality &&
     source.SupportsDirectPlay &&
     ['mp4', 'm4v', 'webm'].includes((source.Container || '').toLowerCase());
 
@@ -551,9 +588,11 @@ export async function getPlaybackInfo(
   }
 
   let hlsUrl: string;
-  if (!forceTranscode && source.TranscodingUrl) {
-    const parsed = new URL(`${session.serverUrl}${source.TranscodingUrl}`);
-    if (effectiveAudioIndex !== null) {
+  if (source.TranscodingUrl) {
+    // Always prefer Jellyfin's server-negotiated TranscodingUrl (includes SegmentContainer, TranscodeReasons,
+    // PlaySessionId, h264 profile/level, and remux/stream-copy decisions when source fits the bitrate/width cap).
+    const parsed = new URL(source.TranscodingUrl, session.serverUrl);
+    if (effectiveAudioIndex !== null && (hasExplicitAudio || !parsed.searchParams.has('AudioStreamIndex'))) {
       parsed.searchParams.set('AudioStreamIndex', String(effectiveAudioIndex));
     }
     if (needsBurnIn) {
@@ -565,14 +604,20 @@ export async function getPlaybackInfo(
     }
     hlsUrl = parsed.toString();
   } else {
+    const audioBitrate = 192_000;
+    const videoBitrate = Math.max(500_000, (preset.videoBitrate ?? 12_000_000) - audioBitrate);
     const hlsParams = new URLSearchParams({
       MediaSourceId: mediaSourceId,
       PlaySessionId: playSessionId,
       VideoCodec: 'h264',
       AudioCodec: 'aac',
-      AudioBitrate: '192000',
-      VideoBitrate: String(preset.videoBitrate ?? 12_000_000),
-      MaxStreamingBitrate: String(preset.videoBitrate ?? 12_000_000),
+      AudioBitrate: String(audioBitrate),
+      VideoBitrate: String(videoBitrate),
+      TranscodingMaxAudioChannels: '2',
+      SegmentContainer: 'ts',
+      SegmentLength: '6',
+      MinSegments: '1',
+      BreakOnNonKeyFrames: 'true',
       DeviceId: getDeviceId(),
       api_key: session.accessToken,
     });
@@ -707,25 +752,31 @@ export async function getCastPlaybackInfo(
 
   if (source.TranscodingUrl) {
     return {
-      streamUrl: `${session.serverUrl}${source.TranscodingUrl}`,
+      streamUrl: new URL(source.TranscodingUrl, session.serverUrl).toString(),
       isHls: true,
       playSessionId,
       mediaSourceId,
     };
   }
 
+  const audioBitrate = 192_000;
+  const videoBitrate = Math.max(500_000, maxBitrate - audioBitrate);
   const fallbackParams = new URLSearchParams({
     MediaSourceId: mediaSourceId,
     PlaySessionId: playSessionId,
     VideoCodec: 'h264',
     AudioCodec: 'aac',
-    AudioBitrate: '192000',
-    MaxAudioChannels: '2',
-    VideoBitrate: String(maxBitrate),
-    MaxStreamingBitrate: String(maxBitrate),
+    AudioBitrate: String(audioBitrate),
+    VideoBitrate: String(videoBitrate),
+    TranscodingMaxAudioChannels: '2',
+    SegmentContainer: 'ts',
+    SegmentLength: '6',
+    MinSegments: '2',
+    BreakOnNonKeyFrames: 'true',
     DeviceId: `${getDeviceId()}-cast`,
     api_key: session.accessToken,
   });
+  if (preset.maxWidth) fallbackParams.set('MaxWidth', String(preset.maxWidth));
   if (hasExplicitAudio) fallbackParams.set('AudioStreamIndex', String(options.audioStreamIndex));
   if (needsBurnIn) {
     fallbackParams.set('SubtitleStreamIndex', String(options.burnInSubtitleIndex));
