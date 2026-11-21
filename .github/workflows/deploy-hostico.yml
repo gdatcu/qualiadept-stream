@@ -88,22 +88,85 @@ jobs:
           python3 -c "import PIL" 2>/dev/null || python3 -m pip install --quiet pillow
           python3 scripts/apply-android-icons.py --android
 
-      - name: Restore persistent Android signing key & set versionCode
+      - name: Configure persistent Android signing key & versionCode
         env:
           ANDROID_DEBUG_KEYSTORE_BASE64: ${{ secrets.ANDROID_DEBUG_KEYSTORE_BASE64 }}
+          RUN_NUMBER: ${{ github.run_number }}
         run: |
-          if [ -n "$ANDROID_DEBUG_KEYSTORE_BASE64" ]; then
-            mkdir -p "$HOME/.android"
-            echo "$ANDROID_DEBUG_KEYSTORE_BASE64" | base64 -d > "$HOME/.android/debug.keystore"
-          fi
-          sed -i "s/versionCode 1/versionCode ${{ github.run_number }}/" android/app/build.gradle
-          sed -i "s/versionName \"1.0\"/versionName \"1.0.${{ github.run_number }}\"/" android/app/build.gradle
+          python3 - <<'PY'
+          import base64, os, re, sys
+
+          ks_b64 = os.environ.get("ANDROID_DEBUG_KEYSTORE_BASE64", "").strip()
+          if not ks_b64:
+              sys.exit("ERROR: ANDROID_DEBUG_KEYSTORE_BASE64 secret is missing!")
+
+          ks_path = "android/app/qualiadept.jks"
+          with open(ks_path, "wb") as f:
+              f.write(base64.b64decode(ks_b64))
+
+          run_num = os.environ["RUN_NUMBER"]
+          gradle_path = "android/app/build.gradle"
+          with open(gradle_path, "r", encoding="utf-8") as f:
+              text = f.read()
+
+          text = re.sub(r"versionCode\s+\d+", f"versionCode {run_num}", text, count=1)
+          text = re.sub(r'versionName\s+"[^"]+"', f'versionName "1.0.{run_num}"', text, count=1)
+
+          signing_block = """    signingConfigs {
+                  debug {
+                      storeFile file('qualiadept.jks')
+                      storePassword 'android'
+                      keyAlias 'androiddebugkey'
+                      keyPassword 'android'
+                  }
+              }
+              buildTypes {
+                  debug {
+                      signingConfig signingConfigs.debug
+                  }"""
+
+          assert "    buildTypes {" in text, "Expected buildTypes block in android/app/build.gradle"
+          text = text.replace("    buildTypes {", signing_block, 1)
+
+          with open(gradle_path, "w", encoding="utf-8") as f:
+              f.write(text)
+          print(f"Configured qualiadept.jks signingConfig and version 1.0.{run_num}")
+          PY
 
       - name: Build Android APK (Debug)
         working-directory: android
         run: |
           chmod +x gradlew
           ./gradlew assembleDebug
+
+      - name: Verify APK uses persistent Qualiadept certificate
+        run: |
+          python3 - <<'PY'
+          import hashlib, struct, sys
+
+          apk_path = "android/app/build/outputs/apk/debug/app-debug.apk"
+          with open(apk_path, "rb") as f:
+              data = f.read()
+          idx = data.rfind(b"APK Sig Block 42")
+          if idx < 0:
+              sys.exit("ERROR: Missing APK Signature Scheme v2 block!")
+          block_size = struct.unpack("<Q", data[idx - 8 : idx])[0]
+          block = data[idx + 16 - block_size : idx - 8]
+          if b"Qualiadept" not in block:
+              sys.exit("ERROR: APK was NOT signed with the persistent Qualiadept keystore!")
+          pos = 0
+          while True:
+              i = block.find(b"\x30\x82", pos)
+              if i < 0:
+                  break
+              length = struct.unpack(">H", block[i + 2 : i + 4])[0] + 4
+              der = block[i : i + length]
+              if b"Qualiadept" in der:
+                  print("Verified Qualiadept signing cert SHA-256:", hashlib.sha256(der).hexdigest())
+                  sys.exit(0)
+              pos = i + 2
+          sys.exit("ERROR: Could not parse Qualiadept certificate DER!")
+          PY
 
       - name: Prepare versioned APK file
         run: |
