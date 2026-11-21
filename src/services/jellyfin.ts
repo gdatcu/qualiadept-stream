@@ -607,6 +607,8 @@ async function fetchPlaybackInfoUncached(
       audioTracks,
       defaultAudioIndex,
       subtitles,
+      sourceBitrate,
+      sourceWidth,
     };
   }
 
@@ -665,6 +667,8 @@ async function fetchPlaybackInfoUncached(
     audioTracks,
     defaultAudioIndex,
     subtitles,
+    sourceBitrate,
+    sourceWidth,
   };
 }
 

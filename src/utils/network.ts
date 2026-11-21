@@ -1,4 +1,4 @@
-import type { QualityPreset } from '../types/media';
+import { QUALITY_OPTIONS, type QualityPreset } from '../types/media';
 
 interface NetworkConnectionLike {
   type?: string;
@@ -16,8 +16,16 @@ interface StoredThroughput {
   connKey: string;
 }
 
+interface StoredCeiling {
+  quality: QualityPreset;
+  ts: number;
+  connKey: string;
+}
+
 const THROUGHPUT_KEY = 'qualiadept_measured_mbps_v2';
 const THROUGHPUT_TTL_MS = 5 * 60 * 1000;
+const CEILING_KEY = 'qualiadept_stable_ceiling_v1';
+const CEILING_TTL_MS = 15 * 60 * 1000;
 
 function getConnection(): NetworkConnectionLike | null {
   try {
@@ -36,6 +44,21 @@ function getConnectionKey(conn: NetworkConnectionLike | null): string {
 export function isCellularConnection(): boolean {
   const conn = getConnection();
   return conn?.type === 'cellular';
+}
+
+export function getNetworkLabel(): string {
+  const conn = getConnection();
+  if (!conn) return 'Online';
+  if (conn.saveData) return 'Data Saver';
+  if (conn.type === 'wifi') return 'Wi-Fi';
+  if (conn.type === 'ethernet') return 'Ethernet';
+  if (conn.type === 'cellular') {
+    if (conn.effectiveType === '2g' || conn.effectiveType === 'slow-2g') return '2G Mobile';
+    if (conn.effectiveType === '3g') return '3G Mobile';
+    return '5G / 4G Mobile';
+  }
+  if (conn.effectiveType) return conn.effectiveType.toUpperCase();
+  return 'Online';
 }
 
 /**
@@ -73,6 +96,44 @@ export function getStoredThroughputMbps(): number | null {
   }
 }
 
+/**
+ * Remembers the highest quality tier that proved stable (stall-free) on the current network
+ * for 15 minutes, so subsequent episodes/movies don't repeat the buffering discovery cycle.
+ */
+export function recordStableCeiling(quality: QualityPreset): void {
+  try {
+    const payload: StoredCeiling = {
+      quality,
+      ts: Date.now(),
+      connKey: getConnectionKey(getConnection()),
+    };
+    sessionStorage.setItem(CEILING_KEY, JSON.stringify(payload));
+  } catch {
+    // Ignore storage errors
+  }
+}
+
+export function getStableCeilingQuality(): QualityPreset | null {
+  try {
+    const raw = sessionStorage.getItem(CEILING_KEY);
+    if (!raw) return null;
+    const parsed = JSON.parse(raw) as StoredCeiling;
+    if (Date.now() - parsed.ts > CEILING_TTL_MS) return null;
+    if (parsed.connKey !== getConnectionKey(getConnection())) return null;
+    return parsed.quality;
+  } catch {
+    return null;
+  }
+}
+
+export function clearStableCeiling(): void {
+  try {
+    sessionStorage.removeItem(CEILING_KEY);
+  } catch {
+    // Ignore storage errors
+  }
+}
+
 export function qualityRank(q: QualityPreset): number {
   switch (q) {
     case 'auto':
@@ -88,32 +149,50 @@ export function qualityRank(q: QualityPreset): number {
   }
 }
 
-export function getNextLowerQuality(q: QualityPreset): QualityPreset | null {
-  switch (q) {
-    case 'auto':
-    case '1080p':
-      return '720p';
-    case '720p':
-      return '480p';
-    case '480p':
-      return '360p';
-    case '360p':
-      return null;
+/**
+ * Picks the next lower quality tier that ACTUALLY reduces stream bitrate below
+ * both the current tier and the source file's native bitrate (never wastes a step
+ * switching from e.g. a 6 Mbps Original to an 8 Mbps 1080p cap).
+ */
+export function getNextLowerQuality(
+  current: QualityPreset,
+  sourceBitrate?: number
+): QualityPreset | null {
+  const ladder: QualityPreset[] = isCellularConnection()
+    ? ['auto', '720p', '480p', '360p']
+    : ['auto', '1080p', '720p', '480p', '360p'];
+
+  const currentRank = qualityRank(current);
+  const currentOptionBitrate =
+    QUALITY_OPTIONS.find((o) => o.id === current)?.videoBitrate ?? sourceBitrate ?? 12_000_000;
+  const effectiveCurrentBitrate =
+    sourceBitrate && current === 'auto'
+      ? sourceBitrate
+      : Math.min(currentOptionBitrate, sourceBitrate ?? currentOptionBitrate);
+
+  const candidates = ladder.filter((q) => qualityRank(q) < currentRank);
+  if (candidates.length === 0) return null;
+
+  // Prefer the first lower tier whose target bitrate is meaningfully (< 88%) below current effective bitrate
+  for (const candidate of candidates) {
+    const targetBitrate = QUALITY_OPTIONS.find((o) => o.id === candidate)?.videoBitrate;
+    if (!targetBitrate || targetBitrate < effectiveCurrentBitrate * 0.88) {
+      return candidate;
+    }
   }
+
+  return candidates[candidates.length - 1];
 }
 
 /**
- * Chooses the fastest, most fluid starting stream quality for the current network.
- *
- * Crucially, on fast 5G / 4G / Wi-Fi we prefer 'auto' (Original) so Jellyfin uses
- * Direct Play or zero-CPU video remux (-c:v copy) instead of forcing heavy ARM64
- * software video transcoding (which causes startup delays and mid-stream buffering).
- * We only cap quality upfront when the mobile signal is genuinely constrained
- * (Save Data, 2G/3G, low downlink, high RTT, or slow measured transfer speed).
+ * Chooses the optimal starting stream quality for the current network,
+ * prioritizing stability over quality whenever a stable ceiling has been observed
+ * on this network or the connection reports constrained bandwidth/latency.
  */
 export function getRecommendedQuality(): QualityPreset {
   const conn = getConnection();
   const measured = getStoredThroughputMbps();
+  const ceiling = getStableCeilingQuality();
   const downlink =
     conn && typeof conn.downlink === 'number' && conn.downlink > 0 ? conn.downlink : null;
   const rtt = conn && typeof conn.rtt === 'number' && conn.rtt > 0 ? conn.rtt : null;
@@ -123,33 +202,31 @@ export function getRecommendedQuality(): QualityPreset {
       ? Math.min(measured, downlink)
       : measured ?? downlink;
 
-  if (conn?.saveData || conn?.effectiveType === 'slow-2g' || conn?.effectiveType === '2g') {
-    return '360p';
-  }
-  if (effectiveMbps !== null && effectiveMbps < 1.3) {
-    return '360p';
-  }
-  if (rtt !== null && rtt > 450) {
-    return '360p';
+  let networkPick: QualityPreset = 'auto';
+
+  if (
+    conn?.saveData ||
+    conn?.effectiveType === 'slow-2g' ||
+    conn?.effectiveType === '2g' ||
+    (effectiveMbps !== null && effectiveMbps < 1.3) ||
+    (rtt !== null && rtt > 450)
+  ) {
+    networkPick = '360p';
+  } else if (
+    conn?.effectiveType === '3g' ||
+    (effectiveMbps !== null && effectiveMbps < 3.0) ||
+    (rtt !== null && rtt > 260)
+  ) {
+    networkPick = '480p';
+  } else if (conn?.type === 'cellular' && effectiveMbps !== null && effectiveMbps < 5.5) {
+    networkPick = '720p';
   }
 
-  if (conn?.effectiveType === '3g') {
-    return '480p';
-  }
-  if (effectiveMbps !== null && effectiveMbps < 3.0) {
-    return '480p';
-  }
-  if (rtt !== null && rtt > 260) {
-    return '480p';
+  if (ceiling && qualityRank(ceiling) < qualityRank(networkPick)) {
+    return ceiling;
   }
 
-  // Moderately constrained cellular (e.g. congested 4G < 5.5 Mbps): cap at 720p (3 Mbps)
-  if (conn?.type === 'cellular' && effectiveMbps !== null && effectiveMbps < 5.5) {
-    return '720p';
-  }
-
-  // Fast 5G / 4G / Wi-Fi: prefer Original (Direct Play / zero-CPU remux = instant Netflix-like start!)
-  return 'auto';
+  return networkPick;
 }
 
 export function subscribeNetworkChange(listener: () => void): () => void {

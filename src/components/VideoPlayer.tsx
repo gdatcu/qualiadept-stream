@@ -48,10 +48,13 @@ import {
   type CastState,
 } from '../utils/chromecast';
 import {
+  clearStableCeiling,
+  getNetworkLabel,
   getNextLowerQuality,
   getRecommendedQuality,
   qualityRank,
   recordMeasuredThroughput,
+  recordStableCeiling,
   subscribeNetworkChange,
 } from '../utils/network';
 
@@ -90,6 +93,18 @@ function formatTime(sec: number): string {
   return h > 0 ? `${h}:${pad(m)}:${pad(s)}` : `${m}:${pad(s)}`;
 }
 
+function getBufferAheadSeconds(video: HTMLVideoElement): number {
+  const ct = video.currentTime || 0;
+  for (let i = 0; i < video.buffered.length; i++) {
+    const start = video.buffered.start(i);
+    const end = video.buffered.end(i);
+    if (ct >= start - 0.5 && ct <= end + 0.5) {
+      return Math.max(0, end - ct);
+    }
+  }
+  return 0;
+}
+
 export const VideoPlayer: React.FC<VideoPlayerProps> = ({
   session,
   item,
@@ -106,11 +121,16 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
   const adaptiveNoticeTimerRef = useRef<number | null>(null);
   const manualQualityLockedRef = useRef(false);
   const lastAdaptTsRef = useRef(0);
+  const lastSeekTsRef = useRef(0);
+  const streamStartedAtRef = useRef(0);
   const stallTimestampsRef = useRef<number[]>([]);
   const hasStartedPlayingRef = useRef(false);
   const nextPrefetchedIdRef = useRef<string | null>(null);
 
   const [quality, setQuality] = useState<QualityPreset>(() => getRecommendedQuality());
+  const [autoStability, setAutoStability] = useState(true);
+  const [bufferAheadSec, setBufferAheadSec] = useState(0);
+  const [networkLabel, setNetworkLabel] = useState(() => getNetworkLabel());
   const [forceHls, setForceHls] = useState(false);
   const [adaptiveNotice, setAdaptiveNotice] = useState<string | null>(null);
   const [playback, setPlayback] = useState<PlaybackInfo | null>(null);
@@ -291,10 +311,12 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
     (reason: string, targetOverride?: QualityPreset): boolean => {
       if (manualQualityLockedRef.current || castStateRef.current.isConnected) return false;
       const now = Date.now();
-      if (now - lastAdaptTsRef.current < 25_000) return false;
+      // 12s cooldown allows fast cascading (Original → 720p → 480p → 360p) until completely stable
+      if (now - lastAdaptTsRef.current < 12_000) return false;
 
       const currentQ = qualityRef.current;
-      const nextQ = targetOverride ?? getNextLowerQuality(currentQ);
+      const nextQ =
+        targetOverride ?? getNextLowerQuality(currentQ, playbackRef.current?.sourceBitrate);
       if (!nextQ || qualityRank(nextQ) >= qualityRank(currentQ)) return false;
 
       lastAdaptTsRef.current = now;
@@ -303,21 +325,45 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
       if (playbackRef.current && !playbackRef.current.isHls) {
         setForceHls(true);
       }
+      recordStableCeiling(nextQ);
       setQuality(nextQ);
       const label = QUALITY_OPTIONS.find((q) => q.id === nextQ)?.label || nextQ;
-      flashAdaptiveNotice(`Switched to ${label} · ${reason}`);
+      flashAdaptiveNotice(`Lowered to ${label} · ${reason}`);
       return true;
     },
     [flashAdaptiveNotice]
   );
 
-  // Live mobile network change adaptation (e.g. Wi-Fi → 5G or 5G → weak 4G/3G mid-playback)
+  // Records a mid-playback stall (ignoring manual seek transitions within 3s).
+  // 2 stalls within 90 seconds (e.g. buffering every 20-45s) immediately lowers quality until stable!
+  const recordStall = useCallback(
+    (reason = 'stabilizing playback') => {
+      if (!hasStartedPlayingRef.current || castStateRef.current.isConnected) return;
+      const now = Date.now();
+      if (now - lastSeekTsRef.current < 3000) return;
+
+      const recent = stallTimestampsRef.current.filter((t) => now - t < 90_000);
+      // Debounce duplicate waiting + BUFFER_STALLED_ERROR events firing within 2s of each other
+      if (recent.length > 0 && now - recent[recent.length - 1] < 2000) return;
+
+      recent.push(now);
+      stallTimestampsRef.current = recent;
+
+      if (recent.length >= 2) {
+        stepDownQuality(reason);
+      }
+    },
+    [stepDownQuality]
+  );
+
+  // Live network change adaptation across Wi-Fi / 5G / 4G / 3G
   useEffect(() => {
     return subscribeNetworkChange(() => {
+      setNetworkLabel(getNetworkLabel());
       if (manualQualityLockedRef.current || castStateRef.current.isConnected) return;
       const recommended = getRecommendedQuality();
       if (qualityRank(recommended) < qualityRank(qualityRef.current)) {
-        stepDownQuality('adapted to mobile signal', recommended);
+        stepDownQuality('adapted to network', recommended);
       }
     });
   }, [stepDownQuality]);
@@ -359,6 +405,7 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
     setSlowBuffering(false);
     setError(null);
     hasStartedPlayingRef.current = false;
+    streamStartedAtRef.current = 0;
     stallTimestampsRef.current = [];
 
     getPlaybackInfo(session, item, quality, {
@@ -482,16 +529,7 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
         if (!data.fatal) {
           if (data.details === Hls.ErrorDetails.BUFFER_STALLED_ERROR) {
             setBuffering(true);
-            if (hasStartedPlayingRef.current) {
-              const now = Date.now();
-              stallTimestampsRef.current = [
-                ...stallTimestampsRef.current.filter((t) => now - t < 45_000),
-                now,
-              ];
-              if (stallTimestampsRef.current.length >= 3) {
-                stepDownQuality('preventing buffering');
-              }
-            }
+            recordStall('stabilizing playback');
           }
           return;
         }
@@ -546,7 +584,7 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
     } else {
       hlsRef.current = null;
       const onNativeError = () => {
-        // If Direct Play fails on mobile, try stepping down to HLS automatically first
+        // If Direct Play fails, try stepping down to adaptive HLS automatically first
         if (stepDownQuality('switching to adaptive stream')) return;
         setError('Could not load this stream directly. Tap Retry or try another quality.');
         setLoading(false);
@@ -583,11 +621,82 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
       if (hls) hls.destroy();
       if (cleanupNative) cleanupNative();
     };
-  }, [playback, session, item, stepDownQuality]);
+  }, [playback, session, item, stepDownQuality, recordStall]);
+
+  // Continuous 1-second Stability-First Monitor (works on Wi-Fi, 5G, 4G, 3G):
+  // Lowers quality automatically until playback runs with zero periodic buffering.
+  useEffect(() => {
+    if (!playback || loading || error) {
+      setBufferAheadSec(0);
+      return;
+    }
+
+    let continuousStallSec = 0;
+    let lowBufferStreakSec = 0;
+    let bufferingTicks90s: number[] = [];
+
+    const interval = window.setInterval(() => {
+      const video = videoRef.current;
+      if (!video || castStateRef.current.isConnected) return;
+
+      const ahead = getBufferAheadSeconds(video);
+      setBufferAheadSec(Math.round(ahead));
+
+      if (!hasStartedPlayingRef.current || video.paused) {
+        continuousStallSec = 0;
+        lowBufferStreakSec = 0;
+        return;
+      }
+
+      const now = Date.now();
+      // Ignore the 3s immediately after a manual timeline seek
+      if (now - lastSeekTsRef.current < 3000) {
+        continuousStallSec = 0;
+        lowBufferStreakSec = 0;
+        return;
+      }
+
+      const isCurrentlyStalled = video.readyState < 3 || ahead < 0.25;
+      if (isCurrentlyStalled) {
+        continuousStallSec += 1;
+        lowBufferStreakSec = 0;
+        bufferingTicks90s = [...bufferingTicks90s.filter((t) => now - t < 90_000), now];
+
+        // Trigger A: single continuous stall >= 4s -> step down immediately
+        if (continuousStallSec >= 4) {
+          stepDownQuality('eliminating buffering');
+          return;
+        }
+        // Trigger B: >= 5 seconds total spent buffering within any 90s window -> step down
+        if (bufferingTicks90s.length >= 5) {
+          stepDownQuality('prioritizing stability');
+          return;
+        }
+      } else {
+        continuousStallSec = 0;
+        const playedLongEnough = streamStartedAtRef.current > 0 && now - streamStartedAtRef.current > 10_000;
+        const farFromEnd = !video.duration || video.duration - video.currentTime > 12;
+
+        // Trigger C: forward buffer stays critically low (< 3.5s) for 4 consecutive seconds ->
+        // step down proactively BEFORE the video pauses to buffer!
+        if (playedLongEnough && farFromEnd && ahead < 3.5) {
+          lowBufferStreakSec += 1;
+          if (lowBufferStreakSec >= 4) {
+            lowBufferStreakSec = 0;
+            stepDownQuality('low buffer cushion');
+          }
+        } else {
+          lowBufferStreakSec = 0;
+        }
+      }
+    }, 1000);
+
+    return () => window.clearInterval(interval);
+  }, [playback, loading, error, stepDownQuality]);
 
   // Loading & stall recovery watchdog:
-  // - If buffering lasts > 4.5s mid-playback, automatically adapt down one quality tier before user waits
-  // - If already at lowest tier or manually locked, show Reconnect / quality pills & safely nudge MSE
+  // - If buffering lasts > 3.5s mid-playback, automatically lower quality first before user waits
+  // - If already at lowest tier (360p) or manually locked, show Reconnect / quality pills & safely nudge MSE
   // - Hard timeout after 35s of initial loading so the player can never spin forever
   useEffect(() => {
     if ((!loading && !buffering) || error) {
@@ -599,8 +708,14 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
       () => {
         const video = videoRef.current;
         const hls = hlsRef.current;
-        if (!loading && video && !video.paused && hasStartedPlayingRef.current) {
-          if (stepDownQuality('auto-adjusted for smooth playback')) {
+        if (
+          !loading &&
+          video &&
+          !video.paused &&
+          hasStartedPlayingRef.current &&
+          Date.now() - lastSeekTsRef.current >= 3000
+        ) {
+          if (stepDownQuality('auto-adjusted for stability')) {
             return;
           }
         }
@@ -612,7 +727,7 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
           video.play().catch(() => {});
         }
       },
-      loading ? 8000 : 6000
+      loading ? 8000 : 3500
     );
 
     const hardLoadTimeout = loading
@@ -852,6 +967,7 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
 
   const handleQualityChange = (nextQuality: QualityPreset) => {
     manualQualityLockedRef.current = true;
+    setAutoStability(false);
     setForceHls(false);
     if (nextQuality === quality) {
       setShowQualityMenu(false);
@@ -866,6 +982,22 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
       return;
     }
     resumeOverrideRef.current = videoRef.current?.currentTime || 0;
+  };
+
+  const handleEnableAutoStability = () => {
+    manualQualityLockedRef.current = false;
+    setAutoStability(true);
+    setForceHls(false);
+    clearStableCeiling();
+    setShowQualityMenu(false);
+    bumpControls();
+
+    const recommended = getRecommendedQuality();
+    if (recommended !== quality) {
+      resumeOverrideRef.current = videoRef.current?.currentTime || 0;
+      setQuality(recommended);
+    }
+    flashAdaptiveNotice('Auto Stability enabled · prioritizing smooth playback');
   };
 
   const handleRetryStream = () => {
@@ -1105,22 +1237,19 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
         onPlay={() => setPlaying(true)}
         onPlaying={() => {
           hasStartedPlayingRef.current = true;
+          if (streamStartedAtRef.current === 0) {
+            streamStartedAtRef.current = Date.now();
+          }
           setPlaying(true);
           setBuffering(false);
           setLoading(false);
         }}
+        onSeeking={() => {
+          lastSeekTsRef.current = Date.now();
+        }}
         onWaiting={() => {
           setBuffering(true);
-          if (hasStartedPlayingRef.current) {
-            const now = Date.now();
-            stallTimestampsRef.current = [
-              ...stallTimestampsRef.current.filter((t) => now - t < 45_000),
-              now,
-            ];
-            if (stallTimestampsRef.current.length >= 3) {
-              stepDownQuality('preventing buffering');
-            }
-          }
+          recordStall('stabilizing playback');
         }}
         onCanPlay={() => setBuffering(false)}
         onPause={() => {
@@ -1650,10 +1779,12 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
                 className="flex items-center gap-1 rounded-lg bg-white/10 px-2 py-1.5 sm:px-2.5 text-[11px] sm:text-xs font-semibold text-zinc-100 transition hover:bg-white/20 focus:outline-none focus:ring-2 focus:ring-violet-400"
               >
                 <Settings className="h-4 w-4 text-violet-400" />
-                <span className="max-w-[64px] truncate sm:max-w-none">{activeQualityLabel}</span>
+                <span className="max-w-[92px] truncate sm:max-w-none">
+                  {autoStability ? `Auto · ${activeQualityLabel.replace(' HD', '').replace(' SD', '')}` : activeQualityLabel}
+                </span>
               </button>
               {showQualityMenu && (
-                <div className="fixed inset-x-3 bottom-20 z-40 max-h-[65dvh] overflow-y-auto rounded-2xl border border-white/15 bg-surface/95 p-2 shadow-2xl backdrop-blur-xl sm:absolute sm:inset-x-auto sm:bottom-14 sm:right-0 sm:w-64 sm:rounded-xl">
+                <div className="fixed inset-x-3 bottom-20 z-40 max-h-[68dvh] overflow-y-auto rounded-2xl border border-white/15 bg-surface/95 p-2 shadow-2xl backdrop-blur-xl sm:absolute sm:inset-x-auto sm:bottom-14 sm:right-0 sm:w-72 sm:rounded-xl">
                   <div className="flex items-center justify-between px-3 py-1.5">
                     <span className="text-[11px] font-bold uppercase tracking-wider text-zinc-400">
                       Stream Quality
@@ -1665,20 +1796,69 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
                       <X className="h-4 w-4" />
                     </button>
                   </div>
-                  {QUALITY_OPTIONS.map((opt) => (
-                    <button
-                      key={opt.id}
-                      onClick={() => handleQualityChange(opt.id)}
-                      className={`w-full rounded-lg px-3 py-2 text-left transition ${
-                        quality === opt.id
-                          ? 'bg-violet-600 text-white'
-                          : 'text-zinc-200 hover:bg-white/10'
-                      }`}
-                    >
-                      <div className="text-xs font-bold">{opt.label}</div>
-                      <div className="text-[11px] opacity-80">{opt.description}</div>
-                    </button>
-                  ))}
+
+                  {/* Live Network & Buffer Health Strip */}
+                  <div className="mx-1 mb-1.5 flex items-center justify-between rounded-lg bg-white/5 px-2.5 py-1.5 text-[11px] text-zinc-300">
+                    <span className="flex items-center gap-1.5 truncate">
+                      <span
+                        className={`h-2 w-2 rounded-full ${
+                          buffering
+                            ? 'bg-amber-400 animate-pulse'
+                            : bufferAheadSec >= 8
+                            ? 'bg-emerald-400'
+                            : 'bg-violet-400'
+                        }`}
+                      />
+                      {networkLabel}
+                    </span>
+                    <span className="font-mono text-[10px] text-zinc-400">
+                      {bufferAheadSec > 0 ? `${bufferAheadSec}s buffer` : loading ? 'Loading...' : 'Live'}
+                    </span>
+                  </div>
+
+                  {/* Auto (Stability First) Mode */}
+                  <button
+                    onClick={handleEnableAutoStability}
+                    className={`mb-1 flex w-full items-center justify-between gap-2 rounded-lg px-3 py-2 text-left transition ${
+                      autoStability
+                        ? 'bg-violet-600 text-white'
+                        : 'text-zinc-200 hover:bg-white/10'
+                    }`}
+                  >
+                    <div className="min-w-0">
+                      <div className="text-xs font-bold">Auto (Stability First)</div>
+                      <div className="text-[11px] opacity-85">
+                        Auto-lowers quality until buffering stops ({activeQualityLabel})
+                      </div>
+                    </div>
+                    {autoStability && <Check className="h-4 w-4 flex-shrink-0" />}
+                  </button>
+
+                  <div className="my-1 border-t border-white/10" />
+
+                  {QUALITY_OPTIONS.map((opt) => {
+                    const isSelectedManual = !autoStability && quality === opt.id;
+                    const isActiveAuto = autoStability && quality === opt.id;
+                    return (
+                      <button
+                        key={opt.id}
+                        onClick={() => handleQualityChange(opt.id)}
+                        className={`flex w-full items-center justify-between gap-2 rounded-lg px-3 py-2 text-left transition ${
+                          isSelectedManual
+                            ? 'bg-violet-600 text-white'
+                            : isActiveAuto
+                            ? 'bg-white/10 text-white'
+                            : 'text-zinc-200 hover:bg-white/10'
+                        }`}
+                      >
+                        <div className="min-w-0">
+                          <div className="text-xs font-bold">{opt.label}</div>
+                          <div className="text-[11px] opacity-80">{opt.description}</div>
+                        </div>
+                        {isSelectedManual && <Check className="h-4 w-4 flex-shrink-0" />}
+                      </button>
+                    );
+                  })}
                 </div>
               )}
             </div>

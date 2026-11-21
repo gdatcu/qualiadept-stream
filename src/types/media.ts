@@ -81,6 +81,8 @@ export interface PlaybackInfo {
   audioTracks: AudioTrack[];
   defaultAudioIndex: number | null;
   subtitles: SubtitleTrack[];
+  sourceBitrate?: number;
+  sourceWidth?: number;
 }
 
 export interface AuthSession {
