@@ -28,6 +28,8 @@ interface LoginScreenProps {
   /** When opened from Navbar "Switch Profile", allows returning to the active profile */
   onCancel?: () => void;
   activeUserId?: string;
+  /** Informational banner shown when redirected back due to an expired/revoked session */
+  sessionNotice?: string | null;
 }
 
 const AVATAR_GRADIENTS = [
@@ -53,6 +55,7 @@ export const LoginScreen: React.FC<LoginScreenProps> = ({
   onLogin,
   onCancel,
   activeUserId,
+  sessionNotice,
 }) => {
   const [savedProfiles, setSavedProfiles] = useState<AuthSession[]>(() => loadSavedProfiles());
   const [publicUsers, setPublicUsers] = useState<PublicUserProfile[]>([]);
@@ -157,6 +160,12 @@ export const LoginScreen: React.FC<LoginScreenProps> = ({
               : 'Sign in with your personal family account'}
           </p>
         </div>
+
+        {sessionNotice && (
+          <div className="mx-auto mb-5 max-w-md rounded-xl border border-amber-400/35 bg-amber-500/15 px-4 py-3 text-center text-xs font-medium text-amber-200">
+            {sessionNotice}
+          </div>
+        )}
 
         {/* Netflix-style "Who's Watching?" Profile Switcher */}
         {hasAnyProfiles && !showLoginForm ? (

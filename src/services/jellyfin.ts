@@ -18,8 +18,95 @@ import { getDirectPlayVideoCodecs } from '../utils/network';
 
 const SESSION_STORAGE_KEY = 'qualiadept_stream_session_v1';
 const SAVED_PROFILES_KEY = 'qualiadept_stream_profiles_v1';
+const LIBRARY_CACHE_PREFIX = 'qualiadept_library_cache_v1_';
 const DEVICE_ID_KEY = 'qualiadept_stream_device_id';
 const DEMO_FAVORITES_KEY = 'qualiadept_demo_favorites';
+
+export class SessionExpiredError extends Error {
+  constructor(message = 'Your session expired. Please sign in again.') {
+    super(message);
+    this.name = 'SessionExpiredError';
+  }
+}
+
+/**
+ * Resilient fetch with an AbortController timeout (safe on all Android WebViews)
+ * and automatic 1x retry on dropped mobile packets or transient 502/503/504 errors.
+ */
+async function fetchWithRetry(
+  url: string,
+  init: RequestInit = {},
+  options: { timeoutMs?: number; retries?: number } = {}
+): Promise<Response> {
+  const timeoutMs = options.timeoutMs ?? 12_000;
+  const maxRetries = options.retries ?? 1;
+
+  let lastError: unknown;
+  for (let attempt = 0; attempt <= maxRetries; attempt++) {
+    const controller = new AbortController();
+    const timer = window.setTimeout(() => controller.abort(), timeoutMs);
+    try {
+      const res = await fetch(url, { ...init, signal: controller.signal });
+      window.clearTimeout(timer);
+      if (attempt < maxRetries && (res.status === 502 || res.status === 503 || res.status === 504)) {
+        await new Promise((r) => window.setTimeout(r, 700));
+        continue;
+      }
+      return res;
+    } catch (err) {
+      window.clearTimeout(timer);
+      lastError = err;
+      if (attempt < maxRetries) {
+        await new Promise((r) => window.setTimeout(r, 700));
+        continue;
+      }
+    }
+  }
+  if (lastError instanceof DOMException && lastError.name === 'AbortError') {
+    throw new Error('Request timed out on this connection. Check signal and tap Retry.');
+  }
+  throw lastError instanceof Error ? lastError : new Error('Network request failed');
+}
+
+export function loadCachedLibrary(
+  userId: string
+): { items: MediaItem[]; resumeItems: MediaItem[] } | null {
+  try {
+    const raw = localStorage.getItem(`${LIBRARY_CACHE_PREFIX}${userId}`);
+    if (!raw) return null;
+    const parsed = JSON.parse(raw) as {
+      items?: MediaItem[];
+      resumeItems?: MediaItem[];
+      ts?: number;
+    };
+    if (!Array.isArray(parsed.items) || parsed.items.length === 0) return null;
+    return {
+      items: parsed.items,
+      resumeItems: Array.isArray(parsed.resumeItems) ? parsed.resumeItems : [],
+    };
+  } catch {
+    return null;
+  }
+}
+
+export function saveCachedLibrary(
+  userId: string,
+  items: MediaItem[],
+  resumeItems: MediaItem[]
+): void {
+  try {
+    localStorage.setItem(
+      `${LIBRARY_CACHE_PREFIX}${userId}`,
+      JSON.stringify({
+        items: items.slice(0, 250),
+        resumeItems: resumeItems.slice(0, 20),
+        ts: Date.now(),
+      })
+    );
+  } catch {
+    // Ignore quota errors on tight storage devices
+  }
+}
 
 function getDeviceId(): string {
   let id = localStorage.getItem(DEVICE_ID_KEY);
@@ -137,17 +224,21 @@ export async function authenticateJellyfin(
   password: string
 ): Promise<AuthSession> {
   const cleanUrl = normalizeServerUrl(serverUrl);
-  const res = await fetch(`${cleanUrl}/Users/AuthenticateByName`, {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      Authorization: buildAuthHeader(),
+  const res = await fetchWithRetry(
+    `${cleanUrl}/Users/AuthenticateByName`,
+    {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: buildAuthHeader(),
+      },
+      body: JSON.stringify({
+        Username: username.trim(),
+        Pw: password,
+      }),
     },
-    body: JSON.stringify({
-      Username: username.trim(),
-      Pw: password,
-    }),
-  });
+    { timeoutMs: 12_000, retries: 1 }
+  );
 
   if (!res.ok) {
     if (res.status === 401) {
@@ -325,13 +416,14 @@ export async function fetchLibraryItems(session: AuthSession): Promise<MediaItem
     Limit: '250',
   });
 
-  const res = await fetch(
+  const res = await fetchWithRetry(
     `${session.serverUrl}/Users/${session.userId}/Items?${params.toString()}`,
     {
       headers: { Authorization: buildAuthHeader(session.accessToken) },
     }
   );
 
+  if (res.status === 401) throw new SessionExpiredError();
   if (!res.ok) throw new Error(`Failed to fetch library (HTTP ${res.status})`);
   const data = await res.json();
   return (data.Items as RawJellyfinItem[]).map((raw) => mapJellyfinItem(raw, session));
@@ -348,13 +440,14 @@ export async function fetchResumeItems(session: AuthSession): Promise<MediaItem[
     Fields: 'Overview,Genres,RunTimeTicks,UserData',
   });
 
-  const res = await fetch(
+  const res = await fetchWithRetry(
     `${session.serverUrl}/Users/${session.userId}/Items/Resume?${params.toString()}`,
     {
       headers: { Authorization: buildAuthHeader(session.accessToken) },
     }
   );
 
+  if (res.status === 401) throw new SessionExpiredError();
   if (!res.ok) return [];
   const data = await res.json();
   return (data.Items as RawJellyfinItem[]).map((raw) => mapJellyfinItem(raw, session));
@@ -368,7 +461,7 @@ export async function fetchSeasons(
     return DEMO_SEASONS[seriesId] || [];
   }
 
-  const res = await fetch(
+  const res = await fetchWithRetry(
     `${session.serverUrl}/Shows/${seriesId}/Seasons?userId=${session.userId}`,
     {
       headers: { Authorization: buildAuthHeader(session.accessToken) },
@@ -399,7 +492,7 @@ export async function fetchEpisodes(
     Fields: 'Overview,RunTimeTicks,UserData',
   });
 
-  const res = await fetch(
+  const res = await fetchWithRetry(
     `${session.serverUrl}/Shows/${seriesId}/Episodes?${params.toString()}`,
     {
       headers: { Authorization: buildAuthHeader(session.accessToken) },
@@ -635,7 +728,7 @@ async function fetchPlaybackInfoUncached(
   // Explicitly set SubtitleStreamIndex: -1 prevents Jellyfin from auto-burning a default PGS subtitle unless chosen
   playbackBody.SubtitleStreamIndex = needsBurnIn ? options.burnInSubtitleIndex : -1;
 
-  const res = await fetch(
+  const res = await fetchWithRetry(
     `${session.serverUrl}/Items/${item.id}/PlaybackInfo?UserId=${session.userId}`,
     {
       method: 'POST',
@@ -644,9 +737,11 @@ async function fetchPlaybackInfoUncached(
         Authorization: buildAuthHeader(session.accessToken),
       },
       body: JSON.stringify(playbackBody),
-    }
+    },
+    { timeoutMs: 15_000, retries: 1 }
   );
 
+  if (res.status === 401) throw new SessionExpiredError();
   if (!res.ok) throw new Error(`Playback info failed (HTTP ${res.status})`);
   const data = await res.json();
   const source = data.MediaSources?.[0];

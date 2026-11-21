@@ -48,6 +48,16 @@ export default defineConfig({
     }),
   ],
   base: './',
+  build: {
+    rollupOptions: {
+      output: {
+        manualChunks: {
+          hls: ['hls.js'],
+          icons: ['lucide-react'],
+        },
+      },
+    },
+  },
   server: {
     port: 5173,
     host: true,

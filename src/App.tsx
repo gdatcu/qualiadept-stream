@@ -1,13 +1,10 @@
-import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import React, { Suspense, lazy, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { DetailModal } from './components/DetailModal';
-import { DownloadsView } from './components/DownloadsView';
-import { FamilyAdminView } from './components/FamilyAdminView';
 import { HeroBanner } from './components/HeroBanner';
 import { LoginScreen } from './components/LoginScreen';
 import { MediaRow } from './components/MediaRow';
 import { Navbar, type NavTab } from './components/Navbar';
 import { UpdateModal } from './components/UpdateModal';
-import { VideoPlayer } from './components/VideoPlayer';
 import {
   APP_VERSION_NAME,
   checkForAppUpdate,
@@ -15,12 +12,15 @@ import {
   type AppUpdateInfo,
 } from './services/appUpdate';
 import {
+  SessionExpiredError,
   clearSession,
   fetchLibraryItems,
   fetchResumeItems,
+  loadCachedLibrary,
   loadSavedSession,
   refreshSessionProfile,
   removeSavedProfile,
+  saveCachedLibrary,
   toggleFavorite,
 } from './services/jellyfin';
 import {
@@ -31,11 +31,42 @@ import {
 import type { AuthSession, MediaItem } from './types/media';
 import { initTvNavigation } from './utils/tvNavigation';
 
+const DownloadsView = lazy(() =>
+  import('./components/DownloadsView').then((m) => ({ default: m.DownloadsView }))
+);
+const FamilyAdminView = lazy(() =>
+  import('./components/FamilyAdminView').then((m) => ({ default: m.FamilyAdminView }))
+);
+const VideoPlayer = lazy(() =>
+  import('./components/VideoPlayer').then((m) => ({ default: m.VideoPlayer }))
+);
+
+const LazyViewFallback: React.FC<{ fullscreen?: boolean }> = ({ fullscreen }) => (
+  <div
+    className={
+      fullscreen
+        ? 'fixed inset-0 z-50 flex items-center justify-center bg-black'
+        : 'flex min-h-[60vh] items-center justify-center pt-28'
+    }
+  >
+    <div className="h-10 w-10 animate-spin rounded-full border-4 border-violet-500 border-t-transparent" />
+  </div>
+);
+
 export const App: React.FC = () => {
   const [session, setSession] = useState<AuthSession | null>(() => loadSavedSession());
+  const [sessionNotice, setSessionNotice] = useState<string | null>(null);
   const [switchingProfile, setSwitchingProfile] = useState(false);
-  const [items, setItems] = useState<MediaItem[]>([]);
-  const [resumeItems, setResumeItems] = useState<MediaItem[]>([]);
+  const [items, setItems] = useState<MediaItem[]>(() => {
+    const saved = loadSavedSession();
+    if (!saved || saved.isDemo) return [];
+    return loadCachedLibrary(saved.userId)?.items || [];
+  });
+  const [resumeItems, setResumeItems] = useState<MediaItem[]>(() => {
+    const saved = loadSavedSession();
+    if (!saved || saved.isDemo) return [];
+    return loadCachedLibrary(saved.userId)?.resumeItems || [];
+  });
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -53,6 +84,11 @@ export const App: React.FC = () => {
 
   const sessionRef = useRef(session);
   sessionRef.current = session;
+  const itemsRef = useRef(items);
+  itemsRef.current = items;
+  const errorRef = useRef(error);
+  errorRef.current = error;
+  const lastSyncTsRef = useRef(0);
   const switchingProfileRef = useRef(switchingProfile);
   switchingProfileRef.current = switchingProfile;
   const availableUpdateRef = useRef(availableUpdate);
@@ -114,40 +150,110 @@ export const App: React.FC = () => {
     }
   }, [flashStatusToast]);
 
+  const handleSessionExpired = useCallback((expiredSession: AuthSession) => {
+    if (!expiredSession.isDemo) {
+      removeSavedProfile(expiredSession.userId);
+    }
+    clearSession();
+    setSession(null);
+    setSwitchingProfile(false);
+    setItems([]);
+    setResumeItems([]);
+    setSelectedItem(null);
+    setPlayingItem(null);
+    setError(null);
+    setSessionNotice('Your session expired or your password was updated. Please sign in again.');
+  }, []);
+
   const closePlayer = useCallback(() => {
     setPlayingItem(null);
     const activeSession = sessionRef.current;
     if (activeSession && !activeSession.isDemo && navigator.onLine !== false) {
       fetchResumeItems(activeSession)
-        .then(setResumeItems)
-        .catch(() => {});
+        .then((nextResume) => {
+          setResumeItems(nextResume);
+          if (itemsRef.current.length > 0) {
+            saveCachedLibrary(activeSession.userId, itemsRef.current, nextResume);
+          }
+        })
+        .catch((err) => {
+          if (err instanceof SessionExpiredError) {
+            handleSessionExpired(activeSession);
+          }
+        });
     }
-  }, []);
+  }, [handleSessionExpired]);
 
-  const loadLibrary = useCallback(async (activeSession: AuthSession) => {
-    setLoading(true);
-    setError(null);
-    try {
-      const [library, resume] = await Promise.all([
-        fetchLibraryItems(activeSession),
-        fetchResumeItems(activeSession),
-      ]);
-      setItems(library);
-      setResumeItems(resume);
-    } catch (err) {
-      setError(err instanceof Error ? err.message : 'Failed to load library');
-      // If offline / Airplane Mode and user already has saved downloads, jump straight to them
-      if (navigator.onLine === false && listOfflineRecords().length > 0) {
-        setActiveTab('downloads');
+  const loadLibrary = useCallback(
+    async (activeSession: AuthSession, options?: { background?: boolean }) => {
+      const cached = !activeSession.isDemo ? loadCachedLibrary(activeSession.userId) : null;
+      const hasVisibleCatalog = Boolean(options?.background || (cached && cached.items.length > 0));
+
+      if (!hasVisibleCatalog) {
+        setLoading(true);
       }
-    } finally {
-      setLoading(false);
-    }
-  }, []);
+      setError(null);
+      try {
+        const [library, resume] = await Promise.all([
+          fetchLibraryItems(activeSession),
+          fetchResumeItems(activeSession),
+        ]);
+        lastSyncTsRef.current = Date.now();
+        setItems(library);
+        setResumeItems(resume);
+        if (!activeSession.isDemo) {
+          saveCachedLibrary(activeSession.userId, library, resume);
+        }
+      } catch (err) {
+        if (err instanceof SessionExpiredError) {
+          handleSessionExpired(activeSession);
+          return;
+        }
+        // Only show blocking error screen when there is no cached catalog to display
+        if (!hasVisibleCatalog && itemsRef.current.length === 0) {
+          setError(err instanceof Error ? err.message : 'Failed to load library');
+        } else if (!options?.background) {
+          flashStatusToast('Offline · showing cached catalog');
+        }
+        // If offline / Airplane Mode and user already has saved downloads, jump straight to them
+        if (navigator.onLine === false && listOfflineRecords().length > 0 && itemsRef.current.length === 0) {
+          setActiveTab('downloads');
+        }
+      } finally {
+        setLoading(false);
+      }
+    },
+    [handleSessionExpired, flashStatusToast]
+  );
 
   useEffect(() => {
     return initTvNavigation();
   }, []);
+
+  // Auto-recover when mobile network returns or app comes back to foreground
+  useEffect(() => {
+    const onOnline = () => {
+      const active = sessionRef.current;
+      if (!active || active.isDemo) return;
+      if (errorRef.current || itemsRef.current.length === 0 || Date.now() - lastSyncTsRef.current > 30_000) {
+        loadLibrary(active, { background: itemsRef.current.length > 0 });
+      }
+    };
+    const onVisibility = () => {
+      if (document.visibilityState !== 'visible') return;
+      const active = sessionRef.current;
+      if (!active || active.isDemo || playingItemRef.current || navigator.onLine === false) return;
+      if (errorRef.current || Date.now() - lastSyncTsRef.current > 60_000) {
+        loadLibrary(active, { background: itemsRef.current.length > 0 });
+      }
+    };
+    window.addEventListener('online', onOnline);
+    document.addEventListener('visibilitychange', onVisibility);
+    return () => {
+      window.removeEventListener('online', onOnline);
+      document.removeEventListener('visibilitychange', onVisibility);
+    };
+  }, [loadLibrary]);
 
   // Samsung Android / Mobile Back button navigation guard (works in Chrome, PWA & Capacitor APK):
   // Navigates back through Update -> Profile Switch -> Player -> Detail -> Search -> Tabs -> Home, then asks for double-Back to exit.
@@ -226,10 +332,20 @@ export const App: React.FC = () => {
     };
   }, [closePlayer]);
 
-  // Refresh admin status & load library whenever the active user changes
+  // Hydrate cached catalog immediately & refresh from Jellyfin whenever the active user changes
   const activeSessionKey = session ? `${session.serverUrl}:${session.userId}:${session.accessToken}` : null;
   useEffect(() => {
     if (!session) return;
+    if (!session.isDemo) {
+      const cached = loadCachedLibrary(session.userId);
+      if (cached) {
+        setItems(cached.items);
+        setResumeItems(cached.resumeItems);
+      } else {
+        setItems([]);
+        setResumeItems([]);
+      }
+    }
     loadLibrary(session);
     if (!session.isDemo && session.isAdmin === undefined) {
       refreshSessionProfile(session).then((refreshed) => {
@@ -241,6 +357,7 @@ export const App: React.FC = () => {
   }, [activeSessionKey, loadLibrary]);
 
   const handleLogin = (nextSession: AuthSession) => {
+    setSessionNotice(null);
     setSession(nextSession);
     setSwitchingProfile(false);
     setSelectedItem(null);
@@ -255,6 +372,7 @@ export const App: React.FC = () => {
     }
     clearSession();
     setSession(null);
+    setSessionNotice(null);
     setSwitchingProfile(false);
     setItems([]);
     setResumeItems([]);
@@ -320,6 +438,7 @@ export const App: React.FC = () => {
           onLogin={handleLogin}
           onCancel={session ? () => setSwitchingProfile(false) : undefined}
           activeUserId={session?.userId}
+          sessionNotice={switchingProfile ? null : sessionNotice}
         />
         {availableUpdate && (
           <UpdateModal update={availableUpdate} onClose={() => setAvailableUpdate(null)} />
@@ -344,9 +463,13 @@ export const App: React.FC = () => {
       />
 
       {activeTab === 'family' && session.isAdmin ? (
-        <FamilyAdminView session={session} />
+        <Suspense fallback={<LazyViewFallback />}>
+          <FamilyAdminView session={session} />
+        </Suspense>
       ) : activeTab === 'downloads' ? (
-        <DownloadsView onPlayOffline={setPlayingItem} />
+        <Suspense fallback={<LazyViewFallback />}>
+          <DownloadsView onPlayOffline={setPlayingItem} />
+        </Suspense>
       ) : loading ? (
         <div className="flex min-h-screen items-center justify-center">
           <div className="text-center">
@@ -496,14 +619,16 @@ export const App: React.FC = () => {
         />
       )}
 
-      {/* Fullscreen Video Player */}
+      {/* Fullscreen Video Player (lazy-loaded so hls.js is only parsed when watching) */}
       {playingItem && (
-        <VideoPlayer
-          session={session}
-          item={playingItem}
-          onPlayNext={(nextEp) => setPlayingItem(nextEp)}
-          onClose={closePlayer}
-        />
+        <Suspense fallback={<LazyViewFallback fullscreen />}>
+          <VideoPlayer
+            session={session}
+            item={playingItem}
+            onPlayNext={(nextEp) => setPlayingItem(nextEp)}
+            onClose={closePlayer}
+          />
+        </Suspense>
       )}
 
       {/* In-App Android APK Update Prompt */}
