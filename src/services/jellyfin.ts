@@ -47,13 +47,27 @@ export function loadSavedProfiles(): AuthSession[] {
   try {
     const raw = localStorage.getItem(SAVED_PROFILES_KEY);
     const list = raw ? (JSON.parse(raw) as AuthSession[]) : [];
+    // Security: NEVER keep administrator tokens in the 1-tap device switcher vault.
+    // Non-admin family members can switch between their own profiles on a shared TV/tablet,
+    // while switching into an admin account always requires entering the admin password.
+    const safeNonAdmin = list.filter(
+      (p) => !p.isDemo && !p.isAdmin && Boolean(p.accessToken) && Boolean(p.userId)
+    );
+    if (safeNonAdmin.length !== list.length) {
+      localStorage.setItem(SAVED_PROFILES_KEY, JSON.stringify(safeNonAdmin));
+    }
     const current = loadSavedSession();
-    if (current && !current.isDemo && !list.some((p) => p.userId === current.userId)) {
-      const merged = [current, ...list];
+    if (
+      current &&
+      !current.isDemo &&
+      !current.isAdmin &&
+      !safeNonAdmin.some((p) => p.userId === current.userId)
+    ) {
+      const merged = [current, ...safeNonAdmin];
       localStorage.setItem(SAVED_PROFILES_KEY, JSON.stringify(merged));
       return merged;
     }
-    return list.filter((p) => !p.isDemo && Boolean(p.accessToken) && Boolean(p.userId));
+    return safeNonAdmin;
   } catch {
     return [];
   }
@@ -63,6 +77,11 @@ export function upsertSavedProfile(session: AuthSession): void {
   if (session.isDemo) return;
   try {
     const existing = loadSavedProfiles().filter((p) => p.userId !== session.userId);
+    // Never cache administrator sessions in the 1-tap switcher
+    if (session.isAdmin) {
+      localStorage.setItem(SAVED_PROFILES_KEY, JSON.stringify(existing));
+      return;
+    }
     localStorage.setItem(SAVED_PROFILES_KEY, JSON.stringify([session, ...existing]));
   } catch {
     // Ignore storage errors
