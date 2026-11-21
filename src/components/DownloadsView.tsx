@@ -40,7 +40,7 @@ export const DownloadsView: React.FC<DownloadsViewProps> = ({ onPlayOffline }) =
   }, []);
 
   return (
-    <main className="mx-auto max-w-[1400px] px-4 pt-28 pb-16 sm:px-8">
+    <main className="mx-auto max-w-[1400px] px-4 pt-[calc(7.5rem+var(--app-safe-top))] pb-16 sm:px-8">
       {/* Header + Storage Summary */}
       <div className="mb-8 flex flex-wrap items-center justify-between gap-4 border-b border-white/10 pb-5">
         <div>

@@ -12,6 +12,21 @@ services:
         read_only: true
         bind:
           propagation: rslave
+    # Keep live HLS transcode segments in 6 GB of RAM (out of 24 GB VM RAM):
+    # faster startup, zero SSD wear, and transcoding can NEVER fill up the OS disk or lock jellyfin.db.
+    tmpfs:
+      - /cache/transcodes:size=6G,mode=1777
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fsS http://127.0.0.1:8096/health || exit 1"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 45s
+    logging:
+      driver: json-file
+      options:
+        max-size: "20m"
+        max-file: "3"
 
   caddy:
     image: caddy:2-alpine
@@ -24,5 +39,10 @@ services:
       - /opt/streaming/Caddyfile:/etc/caddy/Caddyfile:ro
       - /opt/streaming/caddy/data:/data
       - /opt/streaming/caddy/config:/config
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
     depends_on:
       - jellyfin

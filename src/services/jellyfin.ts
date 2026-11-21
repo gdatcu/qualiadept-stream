@@ -81,7 +81,7 @@ export async function authenticateJellyfin(
       Authorization: buildAuthHeader(),
     },
     body: JSON.stringify({
-      Username: username,
+      Username: username.trim(),
       Pw: password,
     }),
   });
@@ -89,6 +89,11 @@ export async function authenticateJellyfin(
   if (!res.ok) {
     if (res.status === 401) {
       throw new Error('Invalid username or password.');
+    }
+    if (res.status >= 500) {
+      throw new Error(
+        `Media server error (HTTP ${res.status}). Jellyfin may be restarting or out of cache space — wait 30s and retry.`
+      );
     }
     throw new Error(`Could not connect to ${cleanUrl} (HTTP ${res.status}).`);
   }
@@ -896,12 +901,16 @@ export async function reportPlaybackProgress(
       ? '/Sessions/Playing/Stopped'
       : '/Sessions/Playing/Progress';
 
+  const authHeader = buildAuthHeader(session.accessToken);
+  const keepalive = event === 'stop';
+
   try {
     await fetch(`${session.serverUrl}${endpoint}`, {
       method: 'POST',
+      keepalive,
       headers: {
         'Content-Type': 'application/json',
-        Authorization: buildAuthHeader(session.accessToken),
+        Authorization: authHeader,
       },
       body: JSON.stringify({
         ItemId: itemId,
@@ -914,6 +923,20 @@ export async function reportPlaybackProgress(
     });
   } catch {
     // Non-blocking telemetry
+  }
+
+  // Immediately terminate any server-side FFmpeg process for this PlaySessionId so rapid quality
+  // switches or 10-15 family members browsing never leave zombie transcodes filling CPU or cache.
+  if (event === 'stop' && playSessionId) {
+    const params = new URLSearchParams({
+      deviceId: getDeviceId(),
+      playSessionId,
+    });
+    fetch(`${session.serverUrl}/Videos/ActiveEncodings?${params.toString()}`, {
+      method: 'DELETE',
+      keepalive: true,
+      headers: { Authorization: authHeader },
+    }).catch(() => {});
   }
 }
 

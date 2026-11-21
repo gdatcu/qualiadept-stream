@@ -167,7 +167,7 @@ export const DetailModal: React.FC<DetailModalProps> = ({
     <div
       data-tv-scope="modal"
       onClick={onClose}
-      className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 p-4 backdrop-blur-md overflow-y-auto"
+      className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 px-4 pt-[max(1rem,var(--app-safe-top))] pb-[max(1rem,var(--app-safe-bottom))] backdrop-blur-md overflow-y-auto"
     >
       <div
         onClick={(e) => e.stopPropagation()}

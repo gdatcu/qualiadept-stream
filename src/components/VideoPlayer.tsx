@@ -778,20 +778,27 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
       };
     }
 
+    let stopReported = false;
+    const reportStopOnce = () => {
+      if (stopReported || !playback || isOfflineFile) return;
+      stopReported = true;
+      reportPlaybackProgress(
+        session,
+        item.id,
+        playback.mediaSourceId,
+        playback.playSessionId,
+        video.currentTime || 0,
+        true,
+        'stop'
+      );
+    };
+    window.addEventListener('pagehide', reportStopOnce);
+
     return () => {
+      window.removeEventListener('pagehide', reportStopOnce);
       if (retryTimer) window.clearTimeout(retryTimer);
       hlsRef.current = null;
-      if (playback && !isOfflineFile) {
-        reportPlaybackProgress(
-          session,
-          item.id,
-          playback.mediaSourceId,
-          playback.playSessionId,
-          video.currentTime || 0,
-          true,
-          'stop'
-        );
-      }
+      reportStopOnce();
       if (hls) hls.destroy();
       if (cleanupNative) cleanupNative();
     };
@@ -1890,7 +1897,7 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
 
       {/* Top Overlay Bar */}
       <div
-        className={`absolute top-0 left-0 right-0 z-20 flex items-center justify-between gap-3 bg-gradient-to-b from-black/85 to-transparent px-3 pt-[max(0.75rem,env(safe-area-inset-top))] pb-6 sm:px-6 sm:py-5 transition-opacity duration-300 ${
+        className={`absolute top-0 left-0 right-0 z-20 flex items-center justify-between gap-3 bg-gradient-to-b from-black/85 to-transparent px-3 pt-[max(0.75rem,var(--app-safe-top))] pb-6 sm:px-6 sm:py-5 transition-opacity duration-300 ${
           showControls ? 'opacity-100' : 'opacity-0 pointer-events-none'
         }`}
       >
@@ -1925,7 +1932,7 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
 
       {/* Bottom Controls (z-40 sits ABOVE the z-30 mobile menu backdrop so bottom sheets are 100% clickable!) */}
       <div
-        className={`absolute bottom-0 left-0 right-0 z-40 bg-gradient-to-t from-black/95 via-black/75 to-transparent px-3 pb-[max(0.75rem,env(safe-area-inset-bottom))] pt-10 sm:px-6 sm:pb-6 sm:pt-12 transition-opacity duration-300 ${
+        className={`absolute bottom-0 left-0 right-0 z-40 bg-gradient-to-t from-black/95 via-black/75 to-transparent px-3 pb-[max(0.75rem,var(--app-safe-bottom))] pt-10 sm:px-6 sm:pb-6 sm:pt-12 transition-opacity duration-300 ${
           showControls || isCasting ? 'opacity-100' : 'opacity-0 pointer-events-none'
         }`}
       >

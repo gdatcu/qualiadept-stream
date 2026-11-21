@@ -10,14 +10,17 @@ ExecStart=/usr/bin/rclone mount gdrive: /mnt/gdrive \
   --allow-other \
   --read-only \
   --vfs-cache-mode full \
-  --vfs-cache-max-size 120G \
-  --vfs-cache-max-age 72h \
+  --vfs-cache-max-size 80G \
+  --vfs-cache-min-free-space 25G \
+  --vfs-cache-max-age 48h \
   --vfs-read-chunk-size 8M \
   --vfs-read-chunk-size-limit 256M \
   --vfs-read-ahead 128M \
   --vfs-fast-fingerprint \
   --dir-cache-time 24h \
   --buffer-size 32M \
+  --transfers 8 \
+  --drive-pacer-min-sleep 10ms \
   --poll-interval 1m
 ExecStop=/bin/fusermount -uz /mnt/gdrive
 Restart=always

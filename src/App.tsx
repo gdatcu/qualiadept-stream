@@ -231,7 +231,7 @@ export const App: React.FC = () => {
   }
 
   return (
-    <div className="min-h-screen bg-obsidian text-white pb-20">
+    <div className="min-h-screen bg-obsidian text-white pb-[calc(5.5rem+var(--app-safe-bottom))]">
       <Navbar
         session={session}
         activeTab={activeTab}
@@ -273,7 +273,7 @@ export const App: React.FC = () => {
           </div>
         </div>
       ) : searchQuery.trim() ? (
-        <main className="mx-auto max-w-[1600px] px-4 pt-28 sm:px-8">
+        <main className="mx-auto max-w-[1600px] px-4 pt-[calc(7.5rem+var(--app-safe-top))] sm:px-8">
           <h2 className="mb-6 text-xl font-bold">
             Search results for &ldquo;{searchQuery}&rdquo; ({filteredItems.length})
           </h2>
@@ -318,7 +318,9 @@ export const App: React.FC = () => {
 
           <div
             className={`mx-auto max-w-[1600px] ${
-              heroItem && activeTab === 'home' ? '-mt-10 relative z-10' : 'pt-28'
+              heroItem && activeTab === 'home'
+                ? '-mt-10 relative z-10'
+                : 'pt-[calc(7.5rem+var(--app-safe-top))]'
             }`}
           >
             {activeTab === 'home' && resumeItems.length > 0 && (
