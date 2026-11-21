@@ -10,6 +10,7 @@ import {
   Pause,
   Play,
   RefreshCw,
+  Share2,
   Shield,
   Trash2,
   UserPlus,
@@ -514,6 +515,33 @@ export const FamilyAdminView: React.FC<FamilyAdminViewProps> = ({ session }) => 
 
                     {!user.isAdmin && !isSelf && (
                       <div className="flex items-center gap-1">
+                        <button
+                          disabled={isBusy}
+                          onClick={async () => {
+                            const inviteText = `Qualiadept Stream\nWeb: https://stream.qualiadept.eu\nAndroid APK: https://github.com/gdatcu/qualiadept-stream/releases/latest\nUsername: ${user.name}`;
+                            try {
+                              if (navigator.share) {
+                                await navigator.share({
+                                  title: 'Qualiadept Stream Invite',
+                                  text: inviteText,
+                                });
+                                return;
+                              }
+                            } catch {
+                              // User cancelled or share unavailable — fall through to clipboard
+                            }
+                            try {
+                              await navigator.clipboard.writeText(inviteText);
+                              flashNotice(`Copied invite details for "${user.name}".`);
+                            } catch {
+                              flashNotice(`Username: ${user.name} · https://stream.qualiadept.eu`);
+                            }
+                          }}
+                          title="Share or copy invite"
+                          className="rounded-lg p-1.5 text-zinc-400 transition hover:bg-violet-500/20 hover:text-violet-300"
+                        >
+                          <Share2 className="h-4 w-4" />
+                        </button>
                         <button
                           disabled={isBusy}
                           onClick={() => {
