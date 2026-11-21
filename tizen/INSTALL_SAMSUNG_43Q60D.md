@@ -25,12 +25,27 @@ Samsung locks native `.wgt` app installation so each `.wgt` must be signed once 
 4. **Full reboot the TV:** Hold the **Power** button on the remote for ~3 seconds until the Samsung logo appears (a normal quick standby does not activate Developer Mode).
 5. Re-open **Apps** — you should see red **DEVELOPER MODE** text at the top. Find your TV's IP under **Settings → Connection → Network → Network Status → IP Settings**.
 
-### Step 2 — Sign & Install the `.wgt` From Your PC
-1. Download **`Qualiadept-Stream-Samsung-TV-Tizen-v1.0.XX.zip`** from **GitHub Releases** and unzip it to a folder (e.g. `C:\QualiadeptTV`).
-2. Install **Tizen Studio** (with **TV Extensions** + **Samsung Certificate Extension** via Package Manager).
-3. Open **Tools → Device Manager** → click **`+` (Remote Device Manager)** → enter your `43Q60D` TV IP → toggle **ON** to connect. *(Copy the TV's **DUID** automatically detected here.)*
-4. Open **Tools → Certificate Manager** → **`+`** → choose **Samsung** → **TV** → sign in with your free Samsung account → create an **Author** + **Distributor** certificate (it auto-adds your TV's DUID).
-5. Open **File → Import → Tizen → Tizen Project** → select your unzipped `C:\QualiadeptTV` folder → Profile: **TV-Samsung**.
-6. Right-click the project → **Run As → Tizen Web Application**!
+### Step 2 — Sign & Install the `.wgt` From Your Windows PC (VS Code + Tizen Extension)
+1. Install **Visual Studio Code** and install Samsung's official **`Tizen Extension`** (`publisher: Tizen`).
+2. Open the **Tizen** sidebar → **Use default path** → open **Package Manager → Advanced SDK Installation** → install **`10.0 TV`**.
+3. Open **Device Manager** → **Connect a Remote Device → `+ Add Devices`** → enter your `43Q60D` IP (`port 26101`) → click **Connect**.
+4. Open **Certificate Manager** → **`+ Create a new Certificate`** → Profile name `QualiadeptTV` → **SAMSUNG** → sign in with your free Samsung account → **Add individual DUIDs** (auto-detects your TV) → **Create**.
+5. Run this 1-paste PowerShell command in VS Code to download, sign, install, and launch the latest release on your TV:
+
+```powershell
+$tizen = "$env:USERPROFILE\.tizen-extension-platform\server\sdktools\data\tools\ide\bin\tizen.bat"
+$sdb   = "$env:USERPROFILE\.tizen-extension-platform\server\sdktools\data\tools\sdb.exe"
+$rel   = Invoke-RestMethod "https://api.github.com/repos/gdatcu/qualiadept-stream/releases/latest"
+$asset = $rel.assets | Where-Object { $_.name -like "*Samsung-TV-Tizen*.zip" } | Select-Object -First 1
+Invoke-WebRequest $asset.browser_download_url -OutFile "$env:TEMP\QualiadeptTV.zip"
+Remove-Item C:\QualiadeptTV\* -Recurse -Force -ErrorAction SilentlyContinue
+Expand-Archive "$env:TEMP\QualiadeptTV.zip" -DestinationPath C:\QualiadeptTV -Force
+Remove-Item C:\QualiadeptTV-out\* -Force -ErrorAction SilentlyContinue
+& $tizen package -t wgt -s QualiadeptTV -o C:\QualiadeptTV-out -- C:\QualiadeptTV
+$wgt = Get-ChildItem C:\QualiadeptTV-out\*.wgt | Select-Object -First 1
+if ($wgt.Name -ne "QualiadeptStream.wgt") { Rename-Item $wgt.FullName "QualiadeptStream.wgt" -Force }
+& $tizen install -n QualiadeptStream.wgt -t QE43Q60DAUXXH -- C:\QualiadeptTV-out
+& $tizen run -p QStreamApp.QualiadeptStream -t QE43Q60DAUXXH
+```
 
 **Qualiadept Stream** (with the Q-Play icon) will now appear directly in **Apps** on your Samsung `43Q60D` and can be pinned to your TV Home Bar!

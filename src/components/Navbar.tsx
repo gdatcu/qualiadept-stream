@@ -1,7 +1,8 @@
 import React, { useEffect, useState } from 'react';
-import { Crown, Download, LogOut, Search, Users, X } from 'lucide-react';
+import { Bookmark, Crown, Download, Film, Home, LogOut, Search, Tv, Users, X } from 'lucide-react';
 import { APP_VERSION_NAME, isCapacitorNativeApp } from '../services/appUpdate';
 import type { AuthSession } from '../types/media';
+import { isTizenTv } from '../utils/tvNavigation';
 import { BrandLogo } from './BrandLogo';
 
 export type NavTab = 'home' | 'movies' | 'series' | 'mylist' | 'downloads' | 'family';
@@ -35,6 +36,7 @@ export const Navbar: React.FC<NavbarProps> = ({
   const [searchOpen, setSearchOpen] = useState(false);
   const [profileMenuOpen, setProfileMenuOpen] = useState(false);
   const isNativeApp = isCapacitorNativeApp();
+  const isTv = isTizenTv();
 
   useEffect(() => {
     const onScroll = () => setScrolled(window.scrollY > 30);
@@ -47,19 +49,41 @@ export const Navbar: React.FC<NavbarProps> = ({
     { id: 'movies', label: 'Movies' },
     { id: 'series', label: 'Series' },
     { id: 'mylist', label: 'My List' },
-    { id: 'downloads', label: 'Downloads' },
+    ...(!isTv ? [{ id: 'downloads' as const, label: 'Downloads' }] : []),
     ...(session.isAdmin && !session.isDemo ? [{ id: 'family' as const, label: 'Family' }] : []),
   ];
+
+  const renderTabIcon = (id: NavTab) => {
+    switch (id) {
+      case 'home':
+        return <Home className="h-4 w-4" />;
+      case 'movies':
+        return <Film className="h-4 w-4" />;
+      case 'series':
+        return <Tv className="h-4 w-4" />;
+      case 'mylist':
+        return <Bookmark className="h-4 w-4" />;
+      case 'downloads':
+        return <Download className="h-4 w-4" />;
+      case 'family':
+        return <Crown className="h-4 w-4 text-amber-400" />;
+    }
+  };
 
   return (
     <header
       className={`fixed top-0 left-0 right-0 z-40 pt-[var(--app-safe-top)] transition-all duration-300 ${
         scrolled
           ? 'bg-obsidian/90 backdrop-blur-xl border-b border-white/10 shadow-lg'
-          : 'bg-gradient-to-b from-obsidian/95 via-obsidian/50 to-transparent'
+          : 'bg-gradient-to-b from-obsidian/95 via-obsidian/55 to-transparent'
       }`}
     >
-      <div className="mx-auto flex max-w-[1600px] items-center justify-between px-4 py-3.5 sm:px-8">
+      <div
+        data-tv-row="navbar"
+        className={`mx-auto flex max-w-[1600px] items-center justify-between px-4 sm:px-8 ${
+          isTv ? 'py-4' : 'py-3.5'
+        }`}
+      >
         {/* Left: Brand + Nav */}
         <div className="flex items-center gap-4 md:gap-8 min-w-0">
           <button
@@ -67,23 +91,31 @@ export const Navbar: React.FC<NavbarProps> = ({
               onTabChange('home');
               onSearchChange('');
             }}
-            className="flex-shrink-0 transition hover:opacity-90"
+            className="flex-shrink-0 rounded-xl transition hover:opacity-90"
           >
-            <BrandLogo size="sm" hideTextOnMobile={searchOpen} />
+            <BrandLogo size={isTv ? 'md' : 'sm'} hideTextOnMobile={searchOpen} />
           </button>
 
-          <nav className="hidden md:flex items-center gap-1">
+          <nav
+            className={`hidden md:flex items-center gap-1 ${
+              isTv ? 'rounded-full border border-white/10 bg-white/[0.06] p-1 backdrop-blur-xl' : ''
+            }`}
+          >
             {navItems.map((item) => (
               <button
                 key={item.id}
                 onClick={() => onTabChange(item.id)}
-                className={`flex items-center gap-1.5 rounded-lg px-3.5 py-2 text-sm font-medium transition ${
+                className={`flex items-center gap-2 font-semibold transition ${
+                  isTv ? 'rounded-full px-4 py-2 text-sm' : 'rounded-lg px-3.5 py-2 text-sm font-medium'
+                } ${
                   activeTab === item.id
-                    ? 'bg-white/10 text-white'
-                    : 'text-zinc-400 hover:text-white hover:bg-white/5'
+                    ? isTv
+                      ? 'bg-white text-obsidian shadow-lg'
+                      : 'bg-white/10 text-white'
+                    : 'text-zinc-300 hover:text-white hover:bg-white/10'
                 }`}
               >
-                {item.id === 'family' && <Crown className="h-3.5 w-3.5 text-amber-400" />}
+                {(isTv || item.id === 'family') && renderTabIcon(item.id)}
                 <span>{item.label}</span>
                 {item.id === 'downloads' && (activeDownloadCount > 0 || downloadCount > 0) && (
                   <span
@@ -104,7 +136,7 @@ export const Navbar: React.FC<NavbarProps> = ({
         {/* Right: Search + Profile Switcher Menu */}
         <div className="flex items-center gap-2.5 sm:gap-3">
           {searchOpen ? (
-            <div className="flex items-center rounded-xl border border-white/15 bg-surface/90 px-3 py-1.5 backdrop-blur-md">
+            <div className="flex items-center rounded-full border border-white/15 bg-surface/90 px-3.5 py-1.5 backdrop-blur-md">
               <Search className="h-4 w-4 text-zinc-400" />
               <input
                 autoFocus
@@ -119,7 +151,7 @@ export const Navbar: React.FC<NavbarProps> = ({
                   onSearchChange('');
                   setSearchOpen(false);
                 }}
-                className="text-zinc-400 hover:text-white"
+                className="rounded-full p-1 text-zinc-400 hover:text-white"
               >
                 <X className="h-4 w-4" />
               </button>
@@ -128,9 +160,14 @@ export const Navbar: React.FC<NavbarProps> = ({
             <button
               onClick={() => setSearchOpen(true)}
               aria-label="Search"
-              className="rounded-xl p-2 text-zinc-300 transition hover:bg-white/10 hover:text-white"
+              className={`flex items-center gap-1.5 text-zinc-200 transition hover:bg-white/15 hover:text-white ${
+                isTv
+                  ? 'rounded-full border border-white/10 bg-white/[0.06] px-4 py-2 text-sm font-semibold'
+                  : 'rounded-xl p-2'
+              }`}
             >
-              <Search className="h-5 w-5" />
+              <Search className="h-4 w-4 sm:h-5 sm:w-5" />
+              {isTv && <span>Search</span>}
             </button>
           )}
 
@@ -144,16 +181,18 @@ export const Navbar: React.FC<NavbarProps> = ({
           <div className="relative">
             <button
               onClick={() => setProfileMenuOpen((v) => !v)}
-              className="flex items-center gap-2 rounded-xl border border-white/10 bg-white/5 px-2.5 py-1.5 transition hover:border-violet-400/50 hover:bg-white/10"
+              className={`flex items-center gap-2 border border-white/15 bg-white/[0.07] transition hover:border-violet-400/50 hover:bg-white/15 ${
+                isTv ? 'rounded-full px-3.5 py-1.5' : 'rounded-xl px-2.5 py-1.5'
+              }`}
               title="Switch Profile or Manage Account"
             >
-              <div className="relative flex h-6 w-6 items-center justify-center rounded-full bg-gradient-to-br from-violet-500 to-fuchsia-500 text-xs font-bold">
+              <div className="relative flex h-7 w-7 items-center justify-center rounded-full bg-gradient-to-br from-violet-500 to-fuchsia-500 text-xs font-bold">
                 {session.username.charAt(0).toUpperCase()}
                 {session.isAdmin && !session.isDemo && (
                   <Crown className="absolute -top-1.5 -right-1.5 h-3 w-3 text-amber-400 drop-shadow" />
                 )}
               </div>
-              <span className="hidden sm:inline text-xs font-medium text-zinc-200 max-w-[100px] truncate">
+              <span className="hidden sm:inline text-xs font-semibold text-zinc-100 max-w-[110px] truncate">
                 {session.username}
               </span>
             </button>

@@ -663,10 +663,11 @@ export const App: React.FC = () => {
                   </h2>
                 </div>
 
-                <div className="grid grid-cols-2 gap-3.5 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-6">
+                <div className="grid grid-cols-2 gap-4 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 xl:grid-cols-6">
                   {filteredItems.map((item) => (
                     <div
                       key={item.id}
+                      data-tv-card="true"
                       role="button"
                       tabIndex={0}
                       onClick={() => setSelectedItem(item)}
@@ -676,7 +677,7 @@ export const App: React.FC = () => {
                           setSelectedItem(item);
                         }
                       }}
-                      className="group cursor-pointer overflow-hidden rounded-xl border border-white/10 bg-surface transition hover:scale-[1.03] hover:border-violet-400/50 focus:outline-none focus:scale-[1.04] focus:border-violet-400 focus:ring-4 focus:ring-violet-400"
+                      className="group cursor-pointer overflow-hidden rounded-2xl border border-white/10 bg-surface shadow-lg transition hover:scale-[1.03] hover:border-violet-400/50 focus:outline-none focus:scale-[1.04] focus:border-violet-400 focus:ring-4 focus:ring-violet-400"
                     >
                       <div className="relative aspect-[2/3] bg-surface-elevated">
                         {item.posterUrl && (

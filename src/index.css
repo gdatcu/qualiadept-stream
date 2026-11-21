@@ -28,17 +28,33 @@
     outline-offset: 2px;
   }
 
-  /* High-contrast living-room TV focus ring for Samsung Tizen remote navigation */
+  /* 10-foot living-room Smart TV UI scaling & Apple TV / Disney+ style focus elevation */
+  html.tizen-tv {
+    font-size: 20px;
+  }
+
+  html.tizen-tv body {
+    background: radial-gradient(circle at 18% 0%, rgba(109, 40, 217, 0.22), transparent 45%), #06070d;
+  }
+
   html.tizen-tv button:focus,
   html.tizen-tv a:focus,
   html.tizen-tv input:focus,
   html.tizen-tv select:focus,
   html.tizen-tv [tabindex]:focus {
-    outline: 4px solid #e9d5ff !important;
+    outline: 4px solid #ffffff !important;
     outline-offset: 3px !important;
-    box-shadow: 0 0 0 6px rgba(139, 92, 246, 0.55) !important;
+    box-shadow:
+      0 0 0 8px rgba(139, 92, 246, 0.65),
+      0 14px 36px rgba(0, 0, 0, 0.75) !important;
     position: relative;
-    z-index: 20;
+    z-index: 25;
+    transition: transform 180ms cubic-bezier(0.22, 1, 0.36, 1), box-shadow 180ms ease;
+  }
+
+  html.tizen-tv [data-tv-card="true"]:focus {
+    transform: scale(1.06) !important;
+    border-color: rgba(255, 255, 255, 0.9) !important;
   }
 }
 

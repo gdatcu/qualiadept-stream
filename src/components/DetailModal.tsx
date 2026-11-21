@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import {
   Check,
   CheckCircle2,
@@ -32,6 +32,7 @@ import {
 } from '../services/offlineDownloads';
 import type { AuthSession, MediaItem, SeasonItem } from '../types/media';
 import { getRecommendedQuality } from '../utils/network';
+import { isTizenTv } from '../utils/tvNavigation';
 
 interface DetailModalProps {
   session: AuthSession;
@@ -48,6 +49,8 @@ export const DetailModal: React.FC<DetailModalProps> = ({
   onPlay,
   onToggleFavorite,
 }) => {
+  const isTv = isTizenTv();
+  const playBtnRef = useRef<HTMLButtonElement>(null);
   const [seasons, setSeasons] = useState<SeasonItem[]>([]);
   const [selectedSeasonId, setSelectedSeasonId] = useState<string>('');
   const [episodes, setEpisodes] = useState<MediaItem[]>([]);
@@ -69,7 +72,10 @@ export const DetailModal: React.FC<DetailModalProps> = ({
     setImgFailed(false);
     setDownloadTarget(null);
     setDownloadError(null);
-  }, [item.id]);
+    if (isTv) {
+      window.requestAnimationFrame(() => playBtnRef.current?.focus());
+    }
+  }, [item.id, isTv]);
 
   // Pre-warm PlaybackInfo + Direct Play header while user reads details (Netflix-instant Play)
   useEffect(() => {
@@ -198,10 +204,12 @@ export const DetailModal: React.FC<DetailModalProps> = ({
             <h2 className="text-2xl sm:text-4xl font-black text-white drop-shadow">
               {item.name}
             </h2>
-            <div className="mt-3 flex flex-wrap items-center gap-2.5">
+            <div data-tv-row="detail-actions" className="mt-3 flex flex-wrap items-center gap-3">
               <button
+                ref={playBtnRef}
+                data-tv-default-focus="true"
                 onClick={handlePrimaryPlay}
-                className="flex items-center gap-2 rounded-xl bg-white px-5 py-2.5 text-sm font-bold text-obsidian transition hover:bg-zinc-200"
+                className="flex items-center gap-2 rounded-full bg-white px-6 py-2.5 text-sm font-extrabold text-obsidian shadow-xl transition hover:bg-zinc-200"
               >
                 <Play className="h-4 w-4 fill-obsidian" />
                 {primaryOfflineRec
@@ -215,11 +223,11 @@ export const DetailModal: React.FC<DetailModalProps> = ({
 
               <button
                 onClick={() => onToggleFavorite(item)}
-                className="flex items-center gap-2 rounded-xl border border-white/20 bg-white/10 px-4 py-2.5 text-sm font-semibold text-white backdrop-blur-md transition hover:bg-white/20"
+                className="flex items-center gap-2 rounded-full border border-white/25 bg-white/15 px-5 py-2.5 text-sm font-bold text-white backdrop-blur-md transition hover:bg-white/25"
               >
                 {item.isFavorite ? (
                   <>
-                    <Check className="h-4 w-4 text-violet-400" />
+                    <Check className="h-4 w-4 text-violet-300" />
                     In My List
                   </>
                 ) : (
@@ -230,8 +238,8 @@ export const DetailModal: React.FC<DetailModalProps> = ({
                 )}
               </button>
 
-              {/* Offline Download Button for Movies / Episodes */}
-              {item.type !== 'Series' && !session.isDemo && (
+              {/* Offline Download Button for Movies / Episodes (mobile/desktop only — hidden on Samsung TV) */}
+              {!isTv && item.type !== 'Series' && !session.isDemo && (
                 <>
                   {primaryActiveDl ? (
                     <div className="flex items-center gap-2 rounded-xl border border-violet-400/40 bg-violet-600/25 px-3.5 py-2 text-xs font-semibold text-white backdrop-blur-md">
@@ -466,8 +474,8 @@ export const DetailModal: React.FC<DetailModalProps> = ({
                           </p>
                         </div>
 
-                        {/* Per-Episode Offline Download Action */}
-                        {!session.isDemo && (
+                        {/* Per-Episode Offline Download Action (mobile/desktop only — hidden on Samsung TV) */}
+                        {!isTv && !session.isDemo && (
                           <div
                             className="flex-shrink-0"
                             onClick={(e) => e.stopPropagation()}

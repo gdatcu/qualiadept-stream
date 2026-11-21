@@ -121,6 +121,8 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
   const brightnessTrackRef = useRef<HTMLDivElement>(null);
   const centerPlayBtnRef = useRef<HTMLButtonElement>(null);
   const backBtnRef = useRef<HTMLButtonElement>(null);
+  const qualityBtnRef = useRef<HTMLButtonElement>(null);
+  const subBtnRef = useRef<HTMLButtonElement>(null);
   const isTv = isTizenTv();
   const resumeOverrideRef = useRef<number | null>(null);
   const swipeStartRef = useRef<{ y: number; startBrightness: number; moved: boolean } | null>(null);
@@ -1146,11 +1148,12 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
       if (isBackKey) {
         e.preventDefault();
         if (showSubMenu || showQualityMenu) {
+          const restoreTarget = showQualityMenu ? qualityBtnRef.current : subBtnRef.current;
           setShowSubMenu(false);
           setShowQualityMenu(false);
           bumpControls();
           window.requestAnimationFrame(() => {
-            (centerPlayBtnRef.current || backBtnRef.current)?.focus();
+            (restoreTarget || centerPlayBtnRef.current || backBtnRef.current)?.focus();
           });
         } else if (document.fullscreenElement) {
           document.exitFullscreen().catch(() => {});
@@ -1647,7 +1650,10 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
 
       {/* Center Play / Pause + ±10s Overlay (Netflix-style, great for mobile & touch) */}
       {showControls && !loading && !buffering && !error && !castDeviceName && !showSubMenu && !showQualityMenu && (
-        <div className="pointer-events-none absolute inset-0 z-10 flex items-center justify-center gap-6 sm:gap-10">
+        <div
+          data-tv-row="center"
+          className="pointer-events-none absolute inset-0 z-10 flex items-center justify-center gap-6 sm:gap-10"
+        >
           <button
             onClick={(e) => {
               e.stopPropagation();
@@ -2005,6 +2011,7 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
 
       {/* Top Overlay Bar */}
       <div
+        data-tv-row="top"
         className={`absolute top-0 left-0 right-0 z-20 flex items-center justify-between gap-3 bg-gradient-to-b from-black/85 to-transparent px-3 pt-[max(0.75rem,var(--app-safe-top))] pb-6 sm:px-6 sm:py-5 transition-opacity duration-300 ${
           showControls ? 'opacity-100' : 'opacity-0 pointer-events-none'
         }`}
@@ -2046,7 +2053,7 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
         }`}
       >
         {/* Timeline Scrubber */}
-        <div className="mb-2.5 sm:mb-3 flex items-center gap-2 sm:gap-3">
+        <div data-tv-row="timeline" className="mb-3 sm:mb-4 flex items-center gap-2 sm:gap-3">
           <span className="w-10 sm:w-12 text-[11px] sm:text-xs font-mono text-zinc-300 tabular-nums">
             {formatTime(displayCurrentTime)}
           </span>
@@ -2075,7 +2082,7 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
               }
               bumpControls();
             }}
-            className="h-1.5 flex-1 cursor-pointer appearance-none rounded-full bg-white/25 accent-violet-500"
+            className={`${isTv ? 'h-2.5' : 'h-1.5'} flex-1 cursor-pointer appearance-none rounded-full bg-white/25 accent-violet-500`}
           />
           <span className="w-10 sm:w-12 text-right text-[11px] sm:text-xs font-mono text-zinc-300 tabular-nums">
             {formatTime(displayDuration)}
@@ -2083,7 +2090,7 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
         </div>
 
         {/* Control Buttons */}
-        <div className="flex items-center justify-between gap-1 sm:gap-2">
+        <div data-tv-row="bottom" className="flex items-center justify-between gap-1 sm:gap-2">
           <div className="flex items-center gap-1 sm:gap-2.5 min-w-0">
             <button
               onClick={togglePlay}
@@ -2175,16 +2182,19 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
             )}
           </div>
 
-          <div className="relative flex items-center gap-1 sm:gap-2 flex-shrink-0">
+          <div className="relative flex items-center gap-1.5 sm:gap-2.5 flex-shrink-0">
             {/* Quality Selector */}
             <div className="relative">
               <button
+                ref={qualityBtnRef}
                 onClick={() => {
                   setShowQualityMenu(!showQualityMenu);
                   setShowSubMenu(false);
                   bumpControls();
                 }}
-                className="flex items-center gap-1 rounded-lg bg-white/10 px-2 py-1.5 sm:px-2.5 text-[11px] sm:text-xs font-semibold text-zinc-100 transition hover:bg-white/20 focus:outline-none focus:ring-2 focus:ring-violet-400"
+                className={`flex items-center gap-1.5 rounded-xl bg-white/15 font-semibold text-white transition hover:bg-white/25 focus:outline-none focus:ring-2 focus:ring-violet-400 ${
+                  isTv ? 'px-3.5 py-2 text-xs' : 'px-2 py-1.5 sm:px-2.5 text-[11px] sm:text-xs'
+                }`}
               >
                 {offlineQualityLabel ? (
                   <>
@@ -2195,11 +2205,11 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
                   </>
                 ) : (
                   <>
-                    <Settings className="h-4 w-4 text-violet-400" />
+                    <Settings className="h-4 w-4 text-violet-300" />
                     <span className="max-w-[92px] truncate sm:max-w-none">
                       {autoStability
-                        ? `Auto · ${activeQualityLabel.replace(' HD', '').replace(' SD', '')}`
-                        : activeQualityLabel}
+                        ? `${isTv ? 'Quality: ' : ''}Auto · ${activeQualityLabel.replace(' HD', '').replace(' SD', '')}`
+                        : `${isTv ? 'Quality: ' : ''}${activeQualityLabel}`}
                     </span>
                   </>
                 )}
@@ -2207,18 +2217,24 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
               {showQualityMenu && (
                 <div
                   data-tv-player-menu="true"
-                  className="fixed inset-x-3 bottom-20 z-40 max-h-[68dvh] overflow-y-auto rounded-2xl border border-white/15 bg-surface/95 p-2 shadow-2xl backdrop-blur-xl sm:absolute sm:inset-x-auto sm:bottom-14 sm:right-0 sm:w-72 sm:rounded-xl"
+                  className={`fixed inset-x-3 bottom-20 z-40 max-h-[68dvh] overflow-y-auto rounded-2xl border border-white/20 bg-surface/95 p-2.5 shadow-2xl backdrop-blur-xl sm:absolute sm:inset-x-auto sm:bottom-16 sm:right-0 sm:rounded-2xl ${
+                    isTv ? 'sm:w-96 p-3' : 'sm:w-72'
+                  }`}
                 >
                   <div className="flex items-center justify-between px-3 py-1.5">
-                    <span className="text-[11px] font-bold uppercase tracking-wider text-zinc-400">
+                    <span className="text-[11px] font-bold uppercase tracking-wider text-zinc-300">
                       Stream Quality
                     </span>
-                    <button
-                      onClick={() => setShowQualityMenu(false)}
-                      className="rounded-lg p-1 text-zinc-400 hover:bg-white/10 hover:text-white sm:hidden"
-                    >
-                      <X className="h-4 w-4" />
-                    </button>
+                    {isTv ? (
+                      <span className="text-[10px] font-medium text-zinc-400">↩ Back to close</span>
+                    ) : (
+                      <button
+                        onClick={() => setShowQualityMenu(false)}
+                        className="rounded-lg p-1 text-zinc-400 hover:bg-white/10 hover:text-white sm:hidden"
+                      >
+                        <X className="h-4 w-4" />
+                      </button>
+                    )}
                   </div>
 
                   {/* Live Network & Buffer Health Strip */}
@@ -2243,7 +2259,7 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
                   {/* Auto (Stability First) Mode */}
                   <button
                     onClick={handleEnableAutoStability}
-                    className={`mb-1 flex w-full items-center justify-between gap-2 rounded-lg px-3 py-2 text-left transition ${
+                    className={`mb-1 flex w-full items-center justify-between gap-2 rounded-xl px-3 py-2.5 text-left transition ${
                       autoStability
                         ? 'bg-violet-600 text-white'
                         : 'text-zinc-200 hover:bg-white/10'
@@ -2267,7 +2283,7 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
                       <button
                         key={opt.id}
                         onClick={() => handleQualityChange(opt.id)}
-                        className={`flex w-full items-center justify-between gap-2 rounded-lg px-3 py-2 text-left transition ${
+                        className={`flex w-full items-center justify-between gap-2 rounded-xl px-3 py-2 text-left transition ${
                           isSelectedManual
                             ? 'bg-violet-600 text-white'
                             : isActiveAuto
@@ -2291,25 +2307,29 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
             {hasAudioOrSubs && playback && (
               <div className="relative">
                 <button
+                  ref={subBtnRef}
                   onClick={() => {
                     setShowSubMenu(!showSubMenu);
                     setShowQualityMenu(false);
                     bumpControls();
                   }}
                   title="Audio & Subtitles"
-                  className={`rounded-lg p-1.5 sm:p-2 transition hover:bg-white/10 focus:outline-none focus:ring-2 focus:ring-violet-400 ${
-                    activeSubtitleIndex !== null ? 'text-violet-400' : 'text-zinc-200'
-                  }`}
+                  className={`flex items-center gap-1.5 rounded-xl transition hover:bg-white/25 focus:outline-none focus:ring-2 focus:ring-violet-400 ${
+                    isTv
+                      ? 'bg-white/15 px-3.5 py-2 text-xs font-semibold'
+                      : 'p-1.5 sm:p-2 hover:bg-white/10'
+                  } ${activeSubtitleIndex !== null ? 'text-violet-300' : 'text-white'}`}
                 >
-                  <Subtitles className="h-5 w-5" />
+                  <Subtitles className="h-4 w-4 sm:h-5 sm:w-5" />
+                  {isTv && <span>Audio &amp; Subtitles</span>}
                 </button>
                 {showSubMenu && (
                   <div
                     data-tv-player-menu="true"
-                    className={`fixed inset-x-3 bottom-20 z-40 max-h-[68dvh] overflow-y-auto rounded-2xl border border-white/15 bg-surface/95 p-3 shadow-2xl backdrop-blur-xl sm:absolute sm:inset-x-auto sm:bottom-14 sm:right-0 sm:max-h-[70vh] sm:rounded-xl sm:p-2.5 ${
+                    className={`fixed inset-x-3 bottom-20 z-40 max-h-[68dvh] overflow-y-auto rounded-2xl border border-white/20 bg-surface/95 p-3 shadow-2xl backdrop-blur-xl sm:absolute sm:inset-x-auto sm:bottom-16 sm:right-0 sm:max-h-[70vh] sm:rounded-2xl sm:p-3 ${
                       playback.audioTracks.length > 0 && playback.subtitles.length > 0
-                        ? 'grid grid-cols-1 gap-3 sm:w-[32rem] sm:max-w-[calc(100vw-2rem)] sm:grid-cols-2'
-                        : 'sm:w-64'
+                        ? 'grid grid-cols-1 gap-3 sm:w-[36rem] sm:max-w-[calc(100vw-2rem)] sm:grid-cols-2'
+                        : 'sm:w-80'
                     }`}
                   >
                     {/* Mobile sheet header */}

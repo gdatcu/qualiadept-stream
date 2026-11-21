@@ -87,10 +87,11 @@ export const HeroBanner: React.FC<HeroBannerProps> = ({
           )}
 
           {/* Action Buttons */}
-          <div className="mt-7 flex flex-wrap items-center gap-3">
+          <div data-tv-row="hero-actions" className="mt-7 flex flex-wrap items-center gap-3.5">
             <button
+              data-tv-default-focus="true"
               onClick={() => onPlay(item)}
-              className="flex items-center gap-2.5 rounded-xl bg-white px-7 py-3.5 text-sm font-bold text-obsidian shadow-xl transition hover:scale-[1.02] hover:bg-zinc-200"
+              className="flex items-center gap-2.5 rounded-full bg-white px-7 py-3.5 text-sm font-extrabold text-obsidian shadow-xl transition hover:scale-[1.02] hover:bg-zinc-200"
             >
               <Play className="h-5 w-5 fill-obsidian" />
               {item.resumePositionSeconds ? 'Resume' : 'Play Now'}
@@ -98,7 +99,7 @@ export const HeroBanner: React.FC<HeroBannerProps> = ({
 
             <button
               onClick={() => onMoreInfo(item)}
-              className="flex items-center gap-2 rounded-xl border border-white/20 bg-white/10 px-6 py-3.5 text-sm font-semibold text-white backdrop-blur-md transition hover:bg-white/20"
+              className="flex items-center gap-2 rounded-full border border-white/25 bg-white/15 px-6 py-3.5 text-sm font-bold text-white backdrop-blur-md transition hover:bg-white/25"
             >
               <Info className="h-5 w-5" />
               More Info
@@ -107,10 +108,10 @@ export const HeroBanner: React.FC<HeroBannerProps> = ({
             <button
               onClick={() => onToggleFavorite(item)}
               title={item.isFavorite ? 'Remove from My List' : 'Add to My List'}
-              className="flex h-12 w-12 items-center justify-center rounded-xl border border-white/20 bg-white/10 text-white backdrop-blur-md transition hover:bg-white/20"
+              className="flex h-12 w-12 items-center justify-center rounded-full border border-white/25 bg-white/15 text-white backdrop-blur-md transition hover:bg-white/25"
             >
               {item.isFavorite ? (
-                <Check className="h-5 w-5 text-violet-400" />
+                <Check className="h-5 w-5 text-violet-300" />
               ) : (
                 <Plus className="h-5 w-5" />
               )}

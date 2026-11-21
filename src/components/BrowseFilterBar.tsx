@@ -94,8 +94,11 @@ export const BrowseFilterBar: React.FC<BrowseFilterBarProps> = ({
 
       {/* Horizontal Scrollable Genre Filter Pills */}
       {genres.length > 0 && (
-        <div className="mt-3 flex items-center gap-2 overflow-x-auto no-scrollbar pb-1">
-          <span className="hidden sm:inline-flex flex-shrink-0 items-center gap-1 text-[11px] font-bold uppercase tracking-wider text-zinc-500 mr-1">
+        <div
+          data-tv-row="genres"
+          className="mt-2 flex items-center gap-2.5 overflow-x-auto no-scrollbar py-2"
+        >
+          <span className="hidden sm:inline-flex flex-shrink-0 items-center gap-1 text-[11px] font-bold uppercase tracking-wider text-zinc-400 mr-1">
             <SlidersHorizontal className="h-3.5 w-3.5" />
             Genres
           </span>
