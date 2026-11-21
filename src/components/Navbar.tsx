@@ -1,5 +1,6 @@
 import React, { useEffect, useState } from 'react';
-import { Crown, LogOut, Search, Users, X } from 'lucide-react';
+import { Crown, Download, LogOut, Search, Users, X } from 'lucide-react';
+import { APP_VERSION_NAME, isCapacitorNativeApp } from '../services/appUpdate';
 import type { AuthSession } from '../types/media';
 import { BrandLogo } from './BrandLogo';
 
@@ -12,6 +13,7 @@ interface NavbarProps {
   searchQuery: string;
   onSearchChange: (q: string) => void;
   onSwitchProfile: () => void;
+  onCheckUpdates: () => void;
   onSignOut: () => void;
   downloadCount?: number;
   activeDownloadCount?: number;
@@ -24,6 +26,7 @@ export const Navbar: React.FC<NavbarProps> = ({
   searchQuery,
   onSearchChange,
   onSwitchProfile,
+  onCheckUpdates,
   onSignOut,
   downloadCount = 0,
   activeDownloadCount = 0,
@@ -31,6 +34,7 @@ export const Navbar: React.FC<NavbarProps> = ({
   const [scrolled, setScrolled] = useState(false);
   const [searchOpen, setSearchOpen] = useState(false);
   const [profileMenuOpen, setProfileMenuOpen] = useState(false);
+  const isNativeApp = isCapacitorNativeApp();
 
   useEffect(() => {
     const onScroll = () => setScrolled(window.scrollY > 30);
@@ -197,6 +201,19 @@ export const Navbar: React.FC<NavbarProps> = ({
                       </button>
                     )}
 
+                    {isNativeApp && (
+                      <button
+                        onClick={() => {
+                          setProfileMenuOpen(false);
+                          onCheckUpdates();
+                        }}
+                        className="flex w-full items-center gap-2.5 rounded-xl px-3 py-2 text-left text-xs font-semibold text-emerald-200 transition hover:bg-emerald-500/15"
+                      >
+                        <Download className="h-4 w-4 text-emerald-400" />
+                        Check for Updates
+                      </button>
+                    )}
+
                     <button
                       onClick={() => {
                         setProfileMenuOpen(false);
@@ -207,6 +224,10 @@ export const Navbar: React.FC<NavbarProps> = ({
                       <LogOut className="h-4 w-4" />
                       Sign Out
                     </button>
+                  </div>
+
+                  <div className="mt-1.5 border-t border-white/10 px-3 pt-1.5 text-[10px] text-zinc-500">
+                    Qualiadept Stream v{APP_VERSION_NAME}
                   </div>
                 </div>
               </>

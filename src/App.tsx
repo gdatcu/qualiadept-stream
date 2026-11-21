@@ -6,7 +6,14 @@ import { HeroBanner } from './components/HeroBanner';
 import { LoginScreen } from './components/LoginScreen';
 import { MediaRow } from './components/MediaRow';
 import { Navbar, type NavTab } from './components/Navbar';
+import { UpdateModal } from './components/UpdateModal';
 import { VideoPlayer } from './components/VideoPlayer';
+import {
+  APP_VERSION_NAME,
+  checkForAppUpdate,
+  isCapacitorNativeApp,
+  type AppUpdateInfo,
+} from './services/appUpdate';
 import {
   clearSession,
   fetchLibraryItems,
@@ -37,6 +44,8 @@ export const App: React.FC = () => {
   const [selectedItem, setSelectedItem] = useState<MediaItem | null>(null);
   const [playingItem, setPlayingItem] = useState<MediaItem | null>(null);
   const [showExitToast, setShowExitToast] = useState(false);
+  const [availableUpdate, setAvailableUpdate] = useState<AppUpdateInfo | null>(null);
+  const [statusToast, setStatusToast] = useState<string | null>(null);
   const [offlineCount, setOfflineCount] = useState(() => listOfflineRecords().length);
   const [activeDownloadCount, setActiveDownloadCount] = useState(
     () => listActiveDownloads().length
@@ -46,6 +55,8 @@ export const App: React.FC = () => {
   sessionRef.current = session;
   const switchingProfileRef = useRef(switchingProfile);
   switchingProfileRef.current = switchingProfile;
+  const availableUpdateRef = useRef(availableUpdate);
+  availableUpdateRef.current = availableUpdate;
   const activeTabRef = useRef(activeTab);
   activeTabRef.current = activeTab;
   const searchQueryRef = useRef(searchQuery);
@@ -56,6 +67,15 @@ export const App: React.FC = () => {
   playingItemRef.current = playingItem;
   const exitConfirmUntilRef = useRef(0);
   const exitToastTimerRef = useRef<number | null>(null);
+  const statusToastTimerRef = useRef<number | null>(null);
+
+  const flashStatusToast = useCallback((msg: string) => {
+    setStatusToast(msg);
+    if (statusToastTimerRef.current) window.clearTimeout(statusToastTimerRef.current);
+    statusToastTimerRef.current = window.setTimeout(() => {
+      setStatusToast(null);
+    }, 3200);
+  }, []);
 
   useEffect(() => {
     const syncCounts = () => {
@@ -65,6 +85,34 @@ export const App: React.FC = () => {
     syncCounts();
     return subscribeOfflineDownloads(syncCounts);
   }, []);
+
+  // Automatically check GitHub Releases for a newer signed Android APK 2s after app startup
+  useEffect(() => {
+    if (!isCapacitorNativeApp()) return;
+    let active = true;
+    const timer = window.setTimeout(() => {
+      checkForAppUpdate().then((info) => {
+        if (active && info) {
+          setAvailableUpdate(info);
+        }
+      });
+    }, 2000);
+    return () => {
+      active = false;
+      window.clearTimeout(timer);
+    };
+  }, []);
+
+  const handleManualUpdateCheck = useCallback(async () => {
+    flashStatusToast('Checking for updates...');
+    const info = await checkForAppUpdate({ force: true });
+    if (info) {
+      setStatusToast(null);
+      setAvailableUpdate(info);
+    } else {
+      flashStatusToast(`You're on the latest version (v${APP_VERSION_NAME})`);
+    }
+  }, [flashStatusToast]);
 
   const closePlayer = useCallback(() => {
     setPlayingItem(null);
@@ -102,7 +150,7 @@ export const App: React.FC = () => {
   }, []);
 
   // Samsung Android / Mobile Back button navigation guard (works in Chrome, PWA & Capacitor APK):
-  // Navigates back through Profile Switch -> Player -> Detail -> Search -> Tabs -> Home, then asks for double-Back to exit.
+  // Navigates back through Update -> Profile Switch -> Player -> Detail -> Search -> Tabs -> Home, then asks for double-Back to exit.
   useEffect(() => {
     const armBackGuard = () => {
       try {
@@ -121,6 +169,11 @@ export const App: React.FC = () => {
     window.addEventListener('keydown', onUserGesture, { passive: true });
 
     const onPopState = () => {
+      if (availableUpdateRef.current) {
+        setAvailableUpdate(null);
+        armBackGuard();
+        return;
+      }
       if (switchingProfileRef.current) {
         setSwitchingProfile(false);
         armBackGuard();
@@ -169,6 +222,7 @@ export const App: React.FC = () => {
       window.removeEventListener('keydown', onUserGesture);
       window.removeEventListener('popstate', onPopState);
       if (exitToastTimerRef.current) window.clearTimeout(exitToastTimerRef.current);
+      if (statusToastTimerRef.current) window.clearTimeout(statusToastTimerRef.current);
     };
   }, [closePlayer]);
 
@@ -261,11 +315,16 @@ export const App: React.FC = () => {
 
   if (!session || switchingProfile) {
     return (
-      <LoginScreen
-        onLogin={handleLogin}
-        onCancel={session ? () => setSwitchingProfile(false) : undefined}
-        activeUserId={session?.userId}
-      />
+      <>
+        <LoginScreen
+          onLogin={handleLogin}
+          onCancel={session ? () => setSwitchingProfile(false) : undefined}
+          activeUserId={session?.userId}
+        />
+        {availableUpdate && (
+          <UpdateModal update={availableUpdate} onClose={() => setAvailableUpdate(null)} />
+        )}
+      </>
     );
   }
 
@@ -278,6 +337,7 @@ export const App: React.FC = () => {
         searchQuery={searchQuery}
         onSearchChange={setSearchQuery}
         onSwitchProfile={() => setSwitchingProfile(true)}
+        onCheckUpdates={handleManualUpdateCheck}
         onSignOut={handleSignOut}
         downloadCount={offlineCount}
         activeDownloadCount={activeDownloadCount}
@@ -446,10 +506,22 @@ export const App: React.FC = () => {
         />
       )}
 
+      {/* In-App Android APK Update Prompt */}
+      {availableUpdate && !playingItem && (
+        <UpdateModal update={availableUpdate} onClose={() => setAvailableUpdate(null)} />
+      )}
+
       {/* Samsung Android double-back exit confirmation toast */}
       {showExitToast && (
-        <div className="pointer-events-none fixed bottom-8 left-1/2 z-[60] -translate-x-1/2 rounded-full border border-white/15 bg-black/85 px-4 py-2 text-xs font-semibold text-white shadow-2xl backdrop-blur-md">
+        <div className="pointer-events-none fixed bottom-[calc(2rem+var(--app-safe-bottom))] left-1/2 z-[60] -translate-x-1/2 rounded-full border border-white/15 bg-black/85 px-4 py-2 text-xs font-semibold text-white shadow-2xl backdrop-blur-md">
           Press Back again to exit
+        </div>
+      )}
+
+      {/* Update check status toast */}
+      {statusToast && !showExitToast && (
+        <div className="pointer-events-none fixed bottom-[calc(2rem+var(--app-safe-bottom))] left-1/2 z-[60] max-w-[90vw] -translate-x-1/2 truncate rounded-full border border-violet-400/35 bg-black/85 px-4 py-2 text-xs font-semibold text-zinc-100 shadow-2xl backdrop-blur-md">
+          {statusToast}
         </div>
       )}
     </div>
