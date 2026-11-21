@@ -244,6 +244,11 @@ export async function authenticateJellyfin(
     if (res.status === 401) {
       throw new Error('Invalid username or password.');
     }
+    if (res.status === 403) {
+      throw new Error(
+        'Access denied (HTTP 403). Make sure this account is active and has Remote Access enabled.'
+      );
+    }
     if (res.status >= 500) {
       throw new Error(
         `Media server error (HTTP ${res.status}). Jellyfin may be restarting or out of cache space — wait 30s and retry.`
@@ -1523,19 +1528,36 @@ export async function createFamilyUser(
   }
 
   const created = (await createRes.json()) as RawJellyfinUser;
-  const basePolicy: RawJellyfinUserPolicy = created.Policy || {};
+  let basePolicy: RawJellyfinUserPolicy = created.Policy || {};
+  try {
+    const fullRes = await fetchWithRetry(`${session.serverUrl}/Users/${created.Id}`, {
+      headers: { Authorization: buildAuthHeader(session.accessToken) },
+    });
+    if (fullRes.ok) {
+      const fullUser = (await fullRes.json()) as RawJellyfinUser;
+      if (fullUser.Policy) basePolicy = fullUser.Policy;
+    }
+  } catch {
+    // Fall back to created.Policy
+  }
 
   const safePolicy: RawJellyfinUserPolicy = {
     ...basePolicy,
     IsAdministrator: false,
     IsDisabled: false,
     IsHidden: !input.showOnSharedLogin,
+    EnableRemoteAccess: true,
+    EnableAllDevices: true,
+    EnableAllChannels: true,
+    EnableAllFolders: true,
     EnableContentDeletion: false,
+    EnableContentDownloading: true,
     EnableMediaPlayback: true,
     EnableAudioPlaybackTranscoding: true,
     EnableVideoPlaybackTranscoding: input.allowTranscoding,
     EnablePlaybackRemuxing: true,
-    EnableAllFolders: true,
+    InvalidLoginAttemptCount: 0,
+    LoginAttemptsBeforeLockout: -1,
     MaxParentalRating: parentalTierToRating(input.parentalTier),
     MaxActiveSessions: Math.max(0, Math.min(5, input.maxActiveSessions)),
     AuthenticationProviderId:
@@ -1546,7 +1568,7 @@ export async function createFamilyUser(
       'Jellyfin.Server.Implementations.Users.DefaultPasswordResetProvider',
   };
 
-  const policyRes = await fetch(`${session.serverUrl}/Users/${created.Id}/Policy`, {
+  const policyRes = await fetchWithRetry(`${session.serverUrl}/Users/${created.Id}/Policy`, {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
@@ -1577,7 +1599,7 @@ export async function updateFamilyUserPolicy(
     throw new Error('Only the administrator can update family accounts.');
   }
 
-  const getRes = await fetch(`${session.serverUrl}/Users/${userId}`, {
+  const getRes = await fetchWithRetry(`${session.serverUrl}/Users/${userId}`, {
     headers: { Authorization: buildAuthHeader(session.accessToken) },
   });
   if (!getRes.ok) throw new Error(`Could not fetch user settings (HTTP ${getRes.status})`);
@@ -1591,6 +1613,15 @@ export async function updateFamilyUserPolicy(
     EnableContentDeletion: Boolean(currentPolicy.IsAdministrator)
       ? Boolean(currentPolicy.EnableContentDeletion)
       : false,
+    // Always guarantee remote 5G/Wi-Fi access, all devices, and offline downloads stay allowed
+    EnableRemoteAccess: true,
+    EnableAllDevices: true,
+    EnableAllChannels: true,
+    EnableAllFolders: true,
+    EnableMediaPlayback: true,
+    EnableContentDownloading: true,
+    InvalidLoginAttemptCount: 0,
+    LoginAttemptsBeforeLockout: -1,
   };
 
   if (patch.parentalTier !== undefined) {
@@ -1609,7 +1640,7 @@ export async function updateFamilyUserPolicy(
     nextPolicy.MaxActiveSessions = Math.max(0, Math.min(5, patch.maxActiveSessions));
   }
 
-  const postRes = await fetch(`${session.serverUrl}/Users/${userId}/Policy`, {
+  const postRes = await fetchWithRetry(`${session.serverUrl}/Users/${userId}/Policy`, {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
