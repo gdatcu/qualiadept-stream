@@ -291,7 +291,7 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
     (reason: string, targetOverride?: QualityPreset): boolean => {
       if (manualQualityLockedRef.current || castStateRef.current.isConnected) return false;
       const now = Date.now();
-      if (now - lastAdaptTsRef.current < 15_000) return false;
+      if (now - lastAdaptTsRef.current < 25_000) return false;
 
       const currentQ = qualityRef.current;
       const nextQ = targetOverride ?? getNextLowerQuality(currentQ);
@@ -390,13 +390,8 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
     let manifestParsed = false;
     let networkRetries = 0;
     let mediaRetries = 0;
-    let loadedFrags = 0;
-    let ewmaMbps: number | null = null;
     let retryTimer: number | null = null;
     let cleanupNative: (() => void) | null = null;
-
-    const currentPresetBitrateMbps =
-      (QUALITY_OPTIONS.find((q) => q.id === qualityRef.current)?.videoBitrate ?? 8_000_000) / 1_000_000;
 
     const initialSeekTarget =
       resumeOverrideRef.current !== null
@@ -438,11 +433,10 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
       hls = new Hls({
         enableWorker: true,
         lowLatencyMode: false,
-        // Stream bytes progressively into MSE & prefetch segment 0 immediately for instant startup
-        progressive: true,
+        // Prefetch segment 0 immediately for fast startup while using battle-tested XhrLoader
         startFragPrefetch: true,
         startPosition: initialSeekTarget > 0 ? initialSeekTarget : -1,
-        // Deep forward buffer cushion absorbs 5G dips, tower handoffs, and transcode jitter with zero pauses
+        // Deep forward buffer cushion absorbs 5G dips and tower handoffs with zero pauses
         maxBufferLength: 60,
         maxMaxBufferLength: 180,
         maxBufferSize: 120 * 1000 * 1000,
@@ -469,22 +463,13 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
         const stats = data.frag?.stats;
         if (!stats) return;
         const bytes = stats.loaded || 0;
-        const ms = (stats.loading?.end || 0) - (stats.loading?.start || 0);
-        if (bytes >= 25_000 && ms >= 15) {
-          const sampleMbps = (bytes * 8) / (ms / 1000) / 1_000_000;
+        // Measure ONLY body transfer duration (end - first), excluding server FFmpeg TTFB wait
+        const firstByte = stats.loading?.first || 0;
+        const endByte = stats.loading?.end || 0;
+        const transferMs = endByte - firstByte;
+        if (bytes >= 60_000 && firstByte > 0 && transferMs >= 20) {
+          const sampleMbps = (bytes * 8) / (transferMs / 1000) / 1_000_000;
           recordMeasuredThroughput(sampleMbps);
-          ewmaMbps = ewmaMbps !== null ? ewmaMbps * 0.65 + sampleMbps * 0.35 : sampleMbps;
-          loadedFrags += 1;
-
-          // Proactive ABR: if sustained download throughput falls below stream bitrate,
-          // step down BEFORE the buffer runs empty (Netflix-style zero-buffering adaptation)
-          if (
-            loadedFrags >= 3 &&
-            hasStartedPlayingRef.current &&
-            ewmaMbps < currentPresetBitrateMbps * 0.92
-          ) {
-            stepDownQuality('optimizing for network speed');
-          }
         }
       });
       hls.on(Hls.Events.FRAG_BUFFERED, () => {
@@ -500,10 +485,10 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
             if (hasStartedPlayingRef.current) {
               const now = Date.now();
               stallTimestampsRef.current = [
-                ...stallTimestampsRef.current.filter((t) => now - t < 40_000),
+                ...stallTimestampsRef.current.filter((t) => now - t < 45_000),
                 now,
               ];
-              if (stallTimestampsRef.current.length >= 2) {
+              if (stallTimestampsRef.current.length >= 3) {
                 stepDownQuality('preventing buffering');
               }
             }
@@ -627,7 +612,7 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
           video.play().catch(() => {});
         }
       },
-      loading ? 8000 : 4500
+      loading ? 8000 : 6000
     );
 
     const hardLoadTimeout = loading
@@ -1129,10 +1114,10 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
           if (hasStartedPlayingRef.current) {
             const now = Date.now();
             stallTimestampsRef.current = [
-              ...stallTimestampsRef.current.filter((t) => now - t < 40_000),
+              ...stallTimestampsRef.current.filter((t) => now - t < 45_000),
               now,
             ];
-            if (stallTimestampsRef.current.length >= 2) {
+            if (stallTimestampsRef.current.length >= 3) {
               stepDownQuality('preventing buffering');
             }
           }

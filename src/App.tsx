@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useMemo, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { DetailModal } from './components/DetailModal';
 import { HeroBanner } from './components/HeroBanner';
 import { LoginScreen } from './components/LoginScreen';
@@ -26,6 +26,28 @@ export const App: React.FC = () => {
   const [searchQuery, setSearchQuery] = useState('');
   const [selectedItem, setSelectedItem] = useState<MediaItem | null>(null);
   const [playingItem, setPlayingItem] = useState<MediaItem | null>(null);
+  const [showExitToast, setShowExitToast] = useState(false);
+
+  const sessionRef = useRef(session);
+  sessionRef.current = session;
+  const activeTabRef = useRef(activeTab);
+  activeTabRef.current = activeTab;
+  const searchQueryRef = useRef(searchQuery);
+  searchQueryRef.current = searchQuery;
+  const selectedItemRef = useRef(selectedItem);
+  selectedItemRef.current = selectedItem;
+  const playingItemRef = useRef(playingItem);
+  playingItemRef.current = playingItem;
+  const exitConfirmUntilRef = useRef(0);
+  const exitToastTimerRef = useRef<number | null>(null);
+
+  const closePlayer = useCallback(() => {
+    setPlayingItem(null);
+    const activeSession = sessionRef.current;
+    if (activeSession && !activeSession.isDemo) {
+      fetchResumeItems(activeSession).then(setResumeItems);
+    }
+  }, []);
 
   const loadLibrary = useCallback(async (activeSession: AuthSession) => {
     setLoading(true);
@@ -47,6 +69,72 @@ export const App: React.FC = () => {
   useEffect(() => {
     return initTvNavigation();
   }, []);
+
+  // Samsung Android / Mobile Back button navigation guard (works in Chrome, PWA & Capacitor APK):
+  // Navigates back through Player -> Detail -> Search -> Tabs -> Home, then asks for double-Back to exit.
+  useEffect(() => {
+    const armBackGuard = () => {
+      try {
+        if (!window.history.state?.qsGuard) {
+          window.history.pushState({ qsGuard: true }, '', window.location.href);
+        }
+      } catch {
+        // Ignore history restrictions
+      }
+    };
+
+    armBackGuard();
+    // Re-arm on user gestures so Chrome Android's History Manipulation Intervention always honors the guard
+    const onUserGesture = () => armBackGuard();
+    window.addEventListener('pointerdown', onUserGesture, { passive: true });
+    window.addEventListener('keydown', onUserGesture, { passive: true });
+
+    const onPopState = () => {
+      if (playingItemRef.current) {
+        closePlayer();
+        armBackGuard();
+        return;
+      }
+      if (selectedItemRef.current) {
+        setSelectedItem(null);
+        armBackGuard();
+        return;
+      }
+      if (searchQueryRef.current.trim()) {
+        setSearchQuery('');
+        armBackGuard();
+        return;
+      }
+      if (activeTabRef.current !== 'home') {
+        setActiveTab('home');
+        armBackGuard();
+        return;
+      }
+
+      const now = Date.now();
+      if (now < exitConfirmUntilRef.current) {
+        // Confirmed second Back press within 2.2s: allow exiting cleanly
+        setShowExitToast(false);
+        return;
+      }
+
+      exitConfirmUntilRef.current = now + 2200;
+      armBackGuard();
+      setShowExitToast(true);
+      if (exitToastTimerRef.current) window.clearTimeout(exitToastTimerRef.current);
+      exitToastTimerRef.current = window.setTimeout(() => {
+        setShowExitToast(false);
+      }, 2200);
+    };
+
+    window.addEventListener('popstate', onPopState);
+    return () => {
+      window.removeEventListener('pointerdown', onUserGesture);
+      window.removeEventListener('keydown', onUserGesture);
+      window.removeEventListener('popstate', onPopState);
+      if (exitToastTimerRef.current) window.clearTimeout(exitToastTimerRef.current);
+    };
+  }, [closePlayer]);
 
   useEffect(() => {
     if (session) {
@@ -271,13 +359,15 @@ export const App: React.FC = () => {
           session={session}
           item={playingItem}
           onPlayNext={(nextEp) => setPlayingItem(nextEp)}
-          onClose={() => {
-            setPlayingItem(null);
-            if (session && !session.isDemo) {
-              fetchResumeItems(session).then(setResumeItems);
-            }
-          }}
+          onClose={closePlayer}
         />
+      )}
+
+      {/* Samsung Android double-back exit confirmation toast */}
+      {showExitToast && (
+        <div className="pointer-events-none fixed bottom-8 left-1/2 z-[60] -translate-x-1/2 rounded-full border border-white/15 bg-black/85 px-4 py-2 text-xs font-semibold text-white shadow-2xl backdrop-blur-md">
+          Press Back again to exit
+        </div>
       )}
     </div>
   );

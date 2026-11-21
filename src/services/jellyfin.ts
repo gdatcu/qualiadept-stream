@@ -10,6 +10,7 @@ import {
   type SeasonItem,
   type SubtitleTrack,
 } from '../types/media';
+import { getDirectPlayVideoCodecs } from '../utils/network';
 
 const SESSION_STORAGE_KEY = 'qualiadept_stream_session_v1';
 const DEVICE_ID_KEY = 'qualiadept_stream_device_id';
@@ -463,8 +464,8 @@ async function fetchPlaybackInfoUncached(
             {
               Container: 'mp4,m4v,webm',
               Type: 'Video',
-              VideoCodec: 'h264,vp9,av1',
-              AudioCodec: 'aac,mp3,opus',
+              VideoCodec: getDirectPlayVideoCodecs(),
+              AudioCodec: 'aac,mp3,opus,flac,vorbis',
             },
           ]
         : [],
