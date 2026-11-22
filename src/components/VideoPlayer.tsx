@@ -60,6 +60,11 @@ import {
   recordStableCeiling,
   subscribeNetworkChange,
 } from '../utils/network';
+import {
+  fetchSubtitleCues,
+  getActiveSubtitleLines,
+  type SubtitleCue,
+} from '../utils/subtitles';
 import { isTizenTv } from '../utils/tvNavigation';
 
 interface VideoPlayerProps {
@@ -134,6 +139,7 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
   const streamStartedAtRef = useRef(0);
   const stallTimestampsRef = useRef<number[]>([]);
   const hasStartedPlayingRef = useRef(false);
+  const userPausedRef = useRef(false);
   const nextPrefetchedIdRef = useRef<string | null>(null);
   const offlineRevokeRef = useRef<(() => void) | null>(null);
 
@@ -154,6 +160,8 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
   const [retryNonce, setRetryNonce] = useState(0);
 
   const [playing, setPlaying] = useState(true);
+  const playingRef = useRef(playing);
+  playingRef.current = playing;
   const [muted, setMuted] = useState(false);
   const [volume, setVolume] = useState(1);
   const [currentTime, setCurrentTime] = useState(0);
@@ -170,6 +178,8 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
   const [selectedAudioIndex, setSelectedAudioIndex] = useState<number | null>(null);
   const [activeTextSubIndex, setActiveTextSubIndex] = useState<number | null>(null);
   const [burnInSubIndex, setBurnInSubIndex] = useState<number | null>(null);
+  const [subtitleCues, setSubtitleCues] = useState<SubtitleCue[]>([]);
+  const [loadingSubtitles, setLoadingSubtitles] = useState(false);
   const [showSubMenu, setShowSubMenu] = useState(false);
   const [showQualityMenu, setShowQualityMenu] = useState(false);
 
@@ -398,12 +408,15 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
     setSelectedAudioIndex(null);
     setActiveTextSubIndex(null);
     setBurnInSubIndex(null);
+    setSubtitleCues([]);
+    setLoadingSubtitles(false);
     setForceHls(false);
     setUseNativeHls(false);
     setStreamStatus('Preparing stream...');
     resumeOverrideRef.current = null;
     stallTimestampsRef.current = [];
     hasStartedPlayingRef.current = false;
+    userPausedRef.current = false;
     nextPrefetchedIdRef.current = null;
     if (!manualQualityLockedRef.current) {
       setQuality(getRecommendedQuality());
@@ -527,9 +540,19 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
     };
 
     const triggerPlay = () => {
+      if (userPausedRef.current) {
+        video.pause();
+        setPlaying(false);
+        return;
+      }
       video
         .play()
         .then(() => {
+          if (userPausedRef.current) {
+            video.pause();
+            setPlaying(false);
+            return;
+          }
           setPlaying(true);
         })
         .catch(() => {
@@ -928,7 +951,7 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
           }
         }
         setSlowBuffering(true);
-        if (!loading && video && hls && !video.paused && video.buffered.length > 0) {
+        if (!loading && !userPausedRef.current && video && hls && !video.paused && video.buffered.length > 0) {
           const nextPos = (video.currentTime || 0) + 0.3;
           video.currentTime = nextPos;
           hls.startLoad(nextPos);
@@ -1061,6 +1084,38 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
     return () => window.clearTimeout(timer);
   }, [nextCountdown, nextEpisode, onPlayNext]);
 
+  const pauseVideo = useCallback(() => {
+    if (castStateRef.current.isConnected) {
+      if (!castStateRef.current.isPaused) toggleChromecastPlayPause();
+      bumpControls();
+      return;
+    }
+    userPausedRef.current = true;
+    const video = videoRef.current;
+    if (video) {
+      video.pause();
+    }
+    setPlaying(false);
+    bumpControls();
+  }, [bumpControls]);
+
+  const resumeVideo = useCallback(() => {
+    if (castStateRef.current.isConnected) {
+      if (castStateRef.current.isPaused) toggleChromecastPlayPause();
+      bumpControls();
+      return;
+    }
+    userPausedRef.current = false;
+    const video = videoRef.current;
+    if (video) {
+      video.play().catch(() => {
+        setPlaying(false);
+      });
+    }
+    setPlaying(true);
+    bumpControls();
+  }, [bumpControls]);
+
   const togglePlay = useCallback(() => {
     if (castStateRef.current.isConnected) {
       toggleChromecastPlayPause();
@@ -1069,15 +1124,13 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
     }
     const video = videoRef.current;
     if (!video) return;
-    if (video.paused) {
-      video.play().catch(() => {});
-      setPlaying(true);
+    // If UI shows Pause (playingRef) OR media is actively playing, always honor the user's Pause tap!
+    if (!video.paused || playingRef.current) {
+      pauseVideo();
     } else {
-      video.pause();
-      setPlaying(false);
+      resumeVideo();
     }
-    bumpControls();
-  }, [bumpControls]);
+  }, [bumpControls, pauseVideo, resumeVideo]);
 
   const seekBy = useCallback(
     (delta: number) => {
@@ -1100,6 +1153,30 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
     },
     [bumpControls, duration]
   );
+
+  // Sync browser/OS MediaSession controls (Android Chrome notifications, headphones, Samsung TV)
+  useEffect(() => {
+    const ms = navigator.mediaSession;
+    if (!ms) return;
+    try {
+      ms.setActionHandler('play', () => resumeVideo());
+      ms.setActionHandler('pause', () => pauseVideo());
+      ms.setActionHandler('seekbackward', () => seekBy(-10));
+      ms.setActionHandler('seekforward', () => seekBy(10));
+    } catch {
+      // Ignore unsupported mediaSession actions
+    }
+    return () => {
+      try {
+        ms.setActionHandler('play', null);
+        ms.setActionHandler('pause', null);
+        ms.setActionHandler('seekbackward', null);
+        ms.setActionHandler('seekforward', null);
+      } catch {
+        // Ignore cleanup errors
+      }
+    };
+  }, [pauseVideo, resumeVideo, seekBy]);
 
   const toggleFullscreen = useCallback(() => {
     if (!document.fullscreenElement) {
@@ -1177,12 +1254,10 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
         togglePlay();
       } else if (e.key === 'MediaPlay' || e.keyCode === 415) {
         e.preventDefault();
-        video.play().catch(() => {});
-        setPlaying(true);
+        resumeVideo();
       } else if (e.key === 'MediaPause' || e.keyCode === 19) {
         e.preventDefault();
-        video.pause();
-        setPlaying(false);
+        pauseVideo();
       } else if (e.key === 'MediaStop' || e.keyCode === 413) {
         e.preventDefault();
         onClose();
@@ -1256,6 +1331,8 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
     showSubMenu,
     showQualityMenu,
     togglePlay,
+    pauseVideo,
+    resumeVideo,
     seekBy,
     toggleFullscreen,
     bumpControls,
@@ -1406,25 +1483,60 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
     }
   };
 
-  const textSubtitles = (playback?.subtitles || []).filter((s) => s.isText && s.url);
-
-  // Sync HTML5 <track> visibility whenever activeTextSubIndex or playback changes
+  // Fetch & parse WebVTT subtitle cues directly in JS for reliable custom overlay rendering
+  // across Mobile Chrome, Android APK, Desktop, and Samsung Tizen TV (with automatic burn-in fallback).
   useEffect(() => {
-    const video = videoRef.current;
-    if (!video) return;
-    const syncTracks = () => {
-      const targetPos =
-        activeTextSubIndex !== null
-          ? textSubtitles.findIndex((s) => s.index === activeTextSubIndex)
-          : -1;
-      for (let i = 0; i < video.textTracks.length; i++) {
-        video.textTracks[i].mode = i === targetPos ? 'showing' : 'hidden';
-      }
+    if (activeTextSubIndex === null || !playback) {
+      setSubtitleCues([]);
+      setLoadingSubtitles(false);
+      return;
+    }
+
+    const selectedSub = (playback.subtitles || []).find(
+      (s) => s.index === activeTextSubIndex && s.isText && s.url
+    );
+    if (!selectedSub?.url) {
+      setSubtitleCues([]);
+      setLoadingSubtitles(false);
+      return;
+    }
+
+    const controller = new AbortController();
+    setLoadingSubtitles(true);
+    setSubtitleCues([]);
+    flashAdaptiveNotice(`Loading subtitles: ${selectedSub.label}...`);
+
+    const authHeader =
+      !session.isDemo && session.accessToken
+        ? `MediaBrowser Client="Qualiadept Stream", Device="Web", DeviceId="qualiadept-web", Version="1.0.0", Token="${session.accessToken}"`
+        : undefined;
+
+    fetchSubtitleCues(selectedSub.url, authHeader, controller.signal)
+      .then((cues) => {
+        if (controller.signal.aborted) return;
+        setSubtitleCues(cues);
+        setLoadingSubtitles(false);
+        flashAdaptiveNotice(`Subtitles ready: ${selectedSub.label}`);
+      })
+      .catch(() => {
+        if (controller.signal.aborted) return;
+        setLoadingSubtitles(false);
+        setSubtitleCues([]);
+        // If WebVTT extraction fails (or returns 0 cues), seamlessly fall back to Jellyfin HLS burn-in
+        if (!session.isDemo && !playback.mediaSourceId.startsWith('offline-')) {
+          setActiveTextSubIndex(null);
+          resumeOverrideRef.current = videoRef.current?.currentTime || currentTime || 0;
+          setBurnInSubIndex(selectedSub.index);
+          flashAdaptiveNotice(`Using server burn-in for ${selectedSub.label}...`);
+        } else {
+          flashAdaptiveNotice(`Could not load ${selectedSub.label}`);
+        }
+      });
+
+    return () => {
+      controller.abort();
     };
-    syncTracks();
-    const timer = window.setTimeout(syncTracks, 250);
-    return () => window.clearTimeout(timer);
-  }, [activeTextSubIndex, playback]);
+  }, [activeTextSubIndex, playback, session, flashAdaptiveNotice]);
 
   const effectiveAudioIndex = selectedAudioIndex ?? playback?.defaultAudioIndex ?? null;
 
@@ -1636,25 +1748,46 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
         }}
         {...({ 'x-webkit-airplay': 'allow' } as Record<string, string>)}
         className="h-full w-full object-contain"
-      >
-        {textSubtitles.map((sub) => (
-          <track
-            key={sub.index}
-            kind="subtitles"
-            label={sub.label}
-            srcLang={sub.language}
-            src={sub.url}
-          />
-        ))}
-      </video>
+      />
+
+      {/* Custom WebVTT Subtitle Overlay (works identically on Mobile Chrome, Android APK, Desktop & Samsung TV) */}
+      {!castDeviceName && !error && (subtitleCues.length > 0 || loadingSubtitles) && (() => {
+        const activeLines = getActiveSubtitleLines(subtitleCues, displayCurrentTime);
+        if (activeLines.length === 0 && !loadingSubtitles) return null;
+        return (
+          <div
+            className={`pointer-events-none absolute inset-x-4 z-20 flex flex-col items-center gap-1 text-center transition-all duration-200 sm:inset-x-12 ${
+              showControls ? 'bottom-28 sm:bottom-32' : 'bottom-8 sm:bottom-12'
+            }`}
+          >
+            {loadingSubtitles && activeLines.length === 0 ? (
+              <span className="rounded-lg bg-black/70 px-3 py-1 text-xs font-medium text-zinc-200 backdrop-blur-sm">
+                Loading subtitles...
+              </span>
+            ) : (
+              activeLines.map((line, idx) => (
+                <span
+                  key={idx}
+                  className={`max-w-4xl whitespace-pre-line rounded-lg bg-black/75 px-3.5 py-1.5 font-semibold leading-snug text-white shadow-lg [text-shadow:0_2px_6px_rgba(0,0,0,0.95)] ${
+                    isTv ? 'text-2xl px-5 py-2' : 'text-sm sm:text-xl'
+                  }`}
+                >
+                  {line}
+                </span>
+              ))
+            )}
+          </div>
+        );
+      })()}
 
       {/* Center Play / Pause + ±10s Overlay (Netflix-style, great for mobile & touch) */}
       {showControls && !loading && !buffering && !error && !castDeviceName && !showSubMenu && !showQualityMenu && (
         <div
           data-tv-row="center"
-          className="pointer-events-none absolute inset-0 z-10 flex items-center justify-center gap-6 sm:gap-10"
+          className="pointer-events-none absolute inset-0 z-30 flex items-center justify-center gap-6 sm:gap-10"
         >
           <button
+            type="button"
             onClick={(e) => {
               e.stopPropagation();
               seekBy(-10);
@@ -1665,6 +1798,7 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
             <RotateCcw className="h-6 w-6" />
           </button>
           <button
+            type="button"
             ref={centerPlayBtnRef}
             data-tv-default-focus="true"
             onClick={(e) => {
@@ -1681,6 +1815,7 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
             )}
           </button>
           <button
+            type="button"
             onClick={(e) => {
               e.stopPropagation();
               seekBy(10);
@@ -2093,7 +2228,11 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
         <div data-tv-row="bottom" className="flex items-center justify-between gap-1 sm:gap-2">
           <div className="flex items-center gap-1 sm:gap-2.5 min-w-0">
             <button
-              onClick={togglePlay}
+              type="button"
+              onClick={(e) => {
+                e.stopPropagation();
+                togglePlay();
+              }}
               aria-label={displayPlaying ? 'Pause' : 'Play'}
               className="flex h-9 w-9 sm:h-10 sm:w-10 flex-shrink-0 items-center justify-center rounded-full bg-white text-obsidian transition hover:scale-105 focus:outline-none focus:ring-4 focus:ring-violet-400"
             >
