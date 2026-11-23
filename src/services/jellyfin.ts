@@ -617,6 +617,7 @@ interface RawMediaStream {
   IsDefault?: boolean;
   IsForced?: boolean;
   IsTextSubtitleStream?: boolean;
+  DeliveryUrl?: string;
 }
 
 function formatAudioLabel(s: RawMediaStream): string {
@@ -781,6 +782,20 @@ async function fetchPlaybackInfoUncached(
     .filter((s) => s.Type === 'Subtitle')
     .map((s) => {
       const isText = Boolean(s.IsTextSubtitleStream);
+      let url: string | undefined;
+      if (isText) {
+        if (s.DeliveryUrl) {
+          const resolved = new URL(s.DeliveryUrl, session.serverUrl);
+          // Ensure WebVTT format and auth token for direct fetch across browsers/CORS
+          resolved.pathname = resolved.pathname.replace(/\.(srt|ass|ssa|subrip)$/i, '.vtt');
+          if (!resolved.searchParams.has('api_key')) {
+            resolved.searchParams.set('api_key', session.accessToken);
+          }
+          url = resolved.toString();
+        } else {
+          url = `${session.serverUrl}/Videos/${item.id}/${mediaSourceId}/Subtitles/${s.Index}/0/Stream.vtt?api_key=${token}`;
+        }
+      }
       return {
         index: s.Index,
         label: formatSubtitleLabel(s),
@@ -789,9 +804,7 @@ async function fetchPlaybackInfoUncached(
         codec: s.Codec,
         isDefault: Boolean(s.IsDefault),
         isForced: Boolean(s.IsForced),
-        url: isText
-          ? `${session.serverUrl}/Videos/${item.id}/${mediaSourceId}/Subtitles/${s.Index}/0/Stream.vtt?api_key=${token}`
-          : undefined,
+        url,
       };
     });
 

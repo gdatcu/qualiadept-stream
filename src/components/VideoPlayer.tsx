@@ -140,12 +140,14 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
   const stallTimestampsRef = useRef<number[]>([]);
   const hasStartedPlayingRef = useRef(false);
   const userPausedRef = useRef(false);
+  const autoReconnectCountRef = useRef(0);
   const nextPrefetchedIdRef = useRef<string | null>(null);
   const offlineRevokeRef = useRef<(() => void) | null>(null);
 
   const [quality, setQuality] = useState<QualityPreset>(() => getRecommendedQuality());
   const [autoStability, setAutoStability] = useState(true);
   const [bufferAheadSec, setBufferAheadSec] = useState(0);
+  const [bufferedEndSec, setBufferedEndSec] = useState(0);
   const [networkLabel, setNetworkLabel] = useState(() => getNetworkLabel());
   const [offlineQualityLabel, setOfflineQualityLabel] = useState<string | null>(null);
   const [forceHls, setForceHls] = useState(false);
@@ -838,6 +840,7 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
   useEffect(() => {
     if (!playback || loading || error || playback.mediaSourceId.startsWith('offline-')) {
       setBufferAheadSec(0);
+      setBufferedEndSec(0);
       return;
     }
 
@@ -851,6 +854,7 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
 
       const ahead = getBufferAheadSeconds(video);
       setBufferAheadSec(Math.round(ahead));
+      setBufferedEndSec((video.currentTime || 0) + ahead);
 
       if (!hasStartedPlayingRef.current || video.paused) {
         continuousStallSec = 0;
@@ -990,6 +994,37 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
           }, 12_000)
         : null;
 
+    // Automatic stuck-segment recovery (e.g. wedged FFmpeg or transient Wi-Fi/Google Drive hiccup):
+    // After 18s stuck in loading/buffering with < 0.5s forward buffer, automatically issue a fresh PlaySessionId!
+    const autoReconnectTimer =
+      (loading || buffering) &&
+      !userPausedRef.current &&
+      playback &&
+      !playback.mediaSourceId.startsWith('offline-') &&
+      autoReconnectCountRef.current < 3
+        ? window.setTimeout(() => {
+            if (navigator.onLine === false || userPausedRef.current) return;
+            const video = videoRef.current;
+            const ahead = video ? getBufferAheadSeconds(video) : 0;
+            if (ahead >= 1.5 && hasStartedPlayingRef.current) return;
+
+            autoReconnectCountRef.current += 1;
+            const attempt = autoReconnectCountRef.current;
+            const cur = video?.currentTime || 0;
+            resumeOverrideRef.current =
+              cur > 1
+                ? cur
+                : item.resumePositionSeconds && item.resumePositionSeconds > 5
+                ? item.resumePositionSeconds
+                : 0;
+            setUseNativeHls(false);
+            setError(null);
+            setStreamStatus(`Auto-reconnecting (${attempt}/3)...`);
+            flashAdaptiveNotice(`Connection stalled · auto-reconnecting (${attempt}/3)`);
+            setRetryNonce((n) => n + 1);
+          }, 18_000)
+        : null;
+
     const hardLoadTimeout = loading
       ? window.setTimeout(() => {
           setError(
@@ -999,12 +1034,13 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
           setBuffering(false);
           setSlowBuffering(false);
           setShowControls(true);
-        }, 35_000)
+        }, 45_000)
       : null;
 
     return () => {
       window.clearTimeout(nudgeTimer);
       if (startupFallbackTimer) window.clearTimeout(startupFallbackTimer);
+      if (autoReconnectTimer) window.clearTimeout(autoReconnectTimer);
       if (hardLoadTimeout) window.clearTimeout(hardLoadTimeout);
     };
   }, [
@@ -1017,6 +1053,48 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
     stepDownQuality,
     flashAdaptiveNotice,
   ]);
+
+  // Instant automatic recovery when internet returns or after a transient connection drop
+  useEffect(() => {
+    const triggerReconnect = (notice: string) => {
+      if (playbackRef.current?.mediaSourceId.startsWith('offline-')) return;
+      const cur = videoRef.current?.currentTime || 0;
+      resumeOverrideRef.current =
+        cur > 1
+          ? cur
+          : item.resumePositionSeconds && item.resumePositionSeconds > 5
+          ? item.resumePositionSeconds
+          : 0;
+      setUseNativeHls(false);
+      setError(null);
+      setStreamStatus('Reconnecting stream...');
+      flashAdaptiveNotice(notice);
+      setRetryNonce((n) => n + 1);
+    };
+
+    const onOnline = () => {
+      if (error || loading || buffering) {
+        autoReconnectCountRef.current = 0;
+        triggerReconnect('Connection restored · resuming playback');
+      }
+    };
+
+    window.addEventListener('online', onOnline);
+
+    // If an error occurred while online, automatically retry once after 6 seconds before leaving user stuck
+    const errorAutoRetryTimer =
+      error && navigator.onLine !== false && autoReconnectCountRef.current < 3
+        ? window.setTimeout(() => {
+            autoReconnectCountRef.current += 1;
+            triggerReconnect(`Reconnecting automatically (${autoReconnectCountRef.current}/3)...`);
+          }, 6000)
+        : null;
+
+    return () => {
+      window.removeEventListener('online', onOnline);
+      if (errorAutoRetryTimer) window.clearTimeout(errorAutoRetryTimer);
+    };
+  }, [error, loading, buffering, item.resumePositionSeconds, flashAdaptiveNotice]);
 
   // Sync progress with Jellyfin every 10s (uses TV's live progress while casting so paused local video never conflicts)
   useEffect(() => {
@@ -1436,6 +1514,7 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
   };
 
   const handleRetryStream = () => {
+    autoReconnectCountRef.current = 0;
     resumeOverrideRef.current = getResumePositionForReload();
     setUseNativeHls(false);
     setError(null);
@@ -1483,8 +1562,8 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
     }
   };
 
-  // Fetch & parse WebVTT subtitle cues directly in JS for reliable custom overlay rendering
-  // across Mobile Chrome, Android APK, Desktop, and Samsung Tizen TV (with automatic burn-in fallback).
+  // Fetch & parse WebVTT / SRT subtitle cues directly in JS for reliable custom overlay rendering
+  // across Mobile Chrome, Android APK, Desktop, and Samsung Tizen TV (cached in memory per track).
   useEffect(() => {
     if (activeTextSubIndex === null || !playback) {
       setSubtitleCues([]);
@@ -1504,7 +1583,7 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
     const controller = new AbortController();
     setLoadingSubtitles(true);
     setSubtitleCues([]);
-    flashAdaptiveNotice(`Loading subtitles: ${selectedSub.label}...`);
+    flashAdaptiveNotice(`Extracting subtitles: ${selectedSub.label}...`);
 
     const authHeader =
       !session.isDemo && session.accessToken
@@ -1516,21 +1595,14 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
         if (controller.signal.aborted) return;
         setSubtitleCues(cues);
         setLoadingSubtitles(false);
-        flashAdaptiveNotice(`Subtitles ready: ${selectedSub.label}`);
+        flashAdaptiveNotice(`Subtitles ready: ${selectedSub.label} (${cues.length} lines)`);
       })
-      .catch(() => {
+      .catch((err) => {
         if (controller.signal.aborted) return;
         setLoadingSubtitles(false);
         setSubtitleCues([]);
-        // If WebVTT extraction fails (or returns 0 cues), seamlessly fall back to Jellyfin HLS burn-in
-        if (!session.isDemo && !playback.mediaSourceId.startsWith('offline-')) {
-          setActiveTextSubIndex(null);
-          resumeOverrideRef.current = videoRef.current?.currentTime || currentTime || 0;
-          setBurnInSubIndex(selectedSub.index);
-          flashAdaptiveNotice(`Using server burn-in for ${selectedSub.label}...`);
-        } else {
-          flashAdaptiveNotice(`Could not load ${selectedSub.label}`);
-        }
+        const reason = err instanceof Error && err.message ? ` (${err.message})` : '';
+        flashAdaptiveNotice(`Subtitles took too long${reason} · tap Audio & Subtitles to retry`);
       });
 
     return () => {
@@ -1675,6 +1747,13 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
   const brightnessPct = Math.round(brightness * 100);
   const brightnessFillPct =
     ((brightness - MIN_BRIGHTNESS) / (MAX_BRIGHTNESS - MIN_BRIGHTNESS)) * 100;
+  const safeDuration = displayDuration > 0 ? displayDuration : 100;
+  const playedPct = Math.max(0, Math.min(100, (displayCurrentTime / safeDuration) * 100));
+  const bufferedPct = Math.max(
+    playedPct,
+    Math.min(100, (bufferedEndSec / safeDuration) * 100)
+  );
+  const volumePct = Math.max(0, Math.min(100, (displayMuted ? 0 : displayVolume) * 100));
 
   return (
     <div
@@ -1709,6 +1788,7 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
         onPlay={() => setPlaying(true)}
         onPlaying={() => {
           hasStartedPlayingRef.current = true;
+          autoReconnectCountRef.current = 0;
           if (streamStartedAtRef.current === 0) {
             streamStartedAtRef.current = Date.now();
           }
@@ -2187,39 +2267,67 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
           showControls || isCasting ? 'opacity-100' : 'opacity-0 pointer-events-none'
         }`}
       >
-        {/* Timeline Scrubber */}
-        <div data-tv-row="timeline" className="mb-3 sm:mb-4 flex items-center gap-2 sm:gap-3">
-          <span className="w-10 sm:w-12 text-[11px] sm:text-xs font-mono text-zinc-300 tabular-nums">
+        {/* 3-Layer Colored Timeline Progress Bar (Elapsed Gradient + Buffered Cushion + Unplayed Track) */}
+        <div data-tv-row="timeline" className="mb-3 sm:mb-4 flex items-center gap-2.5 sm:gap-3.5">
+          <span className="w-11 sm:w-14 text-[11px] sm:text-xs font-mono font-bold text-fuchsia-300 tabular-nums">
             {formatTime(displayCurrentTime)}
           </span>
-          <input
-            type="range"
-            aria-label="Seek timeline"
-            min={0}
-            max={displayDuration || 100}
-            value={displayCurrentTime}
-            onKeyDown={(e) => {
-              if (e.key === 'ArrowRight') {
-                e.preventDefault();
-                seekBy(15);
-              } else if (e.key === 'ArrowLeft') {
-                e.preventDefault();
-                seekBy(-15);
-              }
-            }}
-            onChange={(e) => {
-              const val = Number(e.target.value);
-              if (isCasting) {
-                seekChromecast(val);
-              } else {
-                if (videoRef.current) videoRef.current.currentTime = val;
-                setCurrentTime(val);
-              }
-              bumpControls();
-            }}
-            className={`${isTv ? 'h-2.5' : 'h-1.5'} flex-1 cursor-pointer appearance-none rounded-full bg-white/25 accent-violet-500`}
-          />
-          <span className="w-10 sm:w-12 text-right text-[11px] sm:text-xs font-mono text-zinc-300 tabular-nums">
+          <div className="group/timeline relative flex flex-1 items-center py-2">
+            {/* Visual 3-layer bar */}
+            <div
+              className={`relative w-full overflow-hidden rounded-full bg-white/20 transition-all ${
+                isTv ? 'h-2.5' : 'h-1.5 group-hover/timeline:h-2'
+              }`}
+            >
+              {/* Buffered Ahead Range */}
+              <div
+                className="absolute inset-y-0 left-0 rounded-full bg-white/35 transition-all duration-300"
+                style={{ width: `${bufferedPct}%` }}
+              />
+              {/* Elapsed Time Gradient Fill */}
+              <div
+                className="absolute inset-y-0 left-0 rounded-full bg-gradient-to-r from-violet-500 via-fuchsia-500 to-pink-400 shadow-[0_0_12px_rgba(217,70,239,0.75)]"
+                style={{ width: `${playedPct}%` }}
+              />
+            </div>
+            {/* Glowing Scrubber Handle */}
+            <div
+              className={`pointer-events-none absolute top-1/2 -translate-x-1/2 -translate-y-1/2 rounded-full border-2 border-white bg-fuchsia-400 shadow-[0_0_10px_rgba(217,70,239,0.9)] transition-transform group-hover/timeline:scale-125 ${
+                isTv ? 'h-4 w-4' : 'h-3.5 w-3.5'
+              }`}
+              style={{ left: `${playedPct}%` }}
+            />
+            {/* Native accessible interactive range input overlaid cleanly */}
+            <input
+              type="range"
+              aria-label="Seek timeline"
+              min={0}
+              max={safeDuration}
+              step={1}
+              value={displayCurrentTime}
+              onKeyDown={(e) => {
+                if (e.key === 'ArrowRight') {
+                  e.preventDefault();
+                  seekBy(15);
+                } else if (e.key === 'ArrowLeft') {
+                  e.preventDefault();
+                  seekBy(-15);
+                }
+              }}
+              onChange={(e) => {
+                const val = Number(e.target.value);
+                if (isCasting) {
+                  seekChromecast(val);
+                } else {
+                  if (videoRef.current) videoRef.current.currentTime = val;
+                  setCurrentTime(val);
+                }
+                bumpControls();
+              }}
+              className="absolute inset-0 h-full w-full cursor-pointer appearance-none rounded-full bg-transparent [&::-webkit-slider-thumb]:h-4 [&::-webkit-slider-thumb]:w-4 [&::-webkit-slider-thumb]:appearance-none [&::-webkit-slider-thumb]:opacity-0 [&::-moz-range-thumb]:h-4 [&::-moz-range-thumb]:w-4 [&::-moz-range-thumb]:border-0 [&::-moz-range-thumb]:opacity-0"
+            />
+          </div>
+          <span className="w-11 sm:w-14 text-right text-[11px] sm:text-xs font-mono text-zinc-400 tabular-nums">
             {formatTime(displayDuration)}
           </span>
         </div>
@@ -2294,29 +2402,42 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
                     <Volume2 className="h-4 w-4 sm:h-5 sm:w-5" />
                   )}
                 </button>
-                <input
-                  type="range"
-                  min={0}
-                  max={1}
-                  step={0.05}
-                  value={displayMuted ? 0 : displayVolume}
-                  onChange={(e) => {
-                    const v = Number(e.target.value);
-                    if (isCasting) {
-                      setChromecastVolume(v);
+                <div className="relative hidden md:flex w-20 items-center py-2">
+                  <div className="relative h-1.5 w-full overflow-hidden rounded-full bg-white/20">
+                    <div
+                      className="absolute inset-y-0 left-0 rounded-full bg-gradient-to-r from-violet-500 to-fuchsia-400"
+                      style={{ width: `${volumePct}%` }}
+                    />
+                  </div>
+                  <div
+                    className="pointer-events-none absolute top-1/2 h-3 w-3 -translate-x-1/2 -translate-y-1/2 rounded-full border border-white bg-fuchsia-400 shadow"
+                    style={{ left: `${volumePct}%` }}
+                  />
+                  <input
+                    type="range"
+                    aria-label="Volume"
+                    min={0}
+                    max={1}
+                    step={0.05}
+                    value={displayMuted ? 0 : displayVolume}
+                    onChange={(e) => {
+                      const v = Number(e.target.value);
+                      if (isCasting) {
+                        setChromecastVolume(v);
+                        bumpControls();
+                        return;
+                      }
+                      setVolume(v);
+                      setMuted(v === 0);
+                      if (videoRef.current) {
+                        videoRef.current.volume = v;
+                        videoRef.current.muted = v === 0;
+                      }
                       bumpControls();
-                      return;
-                    }
-                    setVolume(v);
-                    setMuted(v === 0);
-                    if (videoRef.current) {
-                      videoRef.current.volume = v;
-                      videoRef.current.muted = v === 0;
-                    }
-                    bumpControls();
-                  }}
-                  className="hidden md:block w-20 h-1 cursor-pointer accent-violet-500"
-                />
+                    }}
+                    className="absolute inset-0 h-full w-full cursor-pointer opacity-0"
+                  />
+                </div>
               </div>
             )}
           </div>

@@ -103,20 +103,33 @@ export function parseWebVtt(vttContent: string): SubtitleCue[] {
   return cues.sort((a, b) => a.start - b.start);
 }
 
+const subtitleCueCache = new Map<string, SubtitleCue[]>();
+
 /**
- * Fetch WebVTT subtitles from Jellyfin with fallback URL format (with and without /0/ segment)
- * and generous timeout for on-the-fly MKV subtitle extraction from Google Drive.
+ * Fetch WebVTT / SRT subtitles from Jellyfin with in-memory caching, fallback URL formats
+ * (.vtt with/without /0/ and raw .srt), and a generous 90s timeout for large Google Drive MKVs.
  */
 export async function fetchSubtitleCues(
   primaryUrl: string,
   authHeader?: string,
   signal?: AbortSignal
 ): Promise<SubtitleCue[]> {
-  const candidateUrls = [primaryUrl];
-  // Jellyfin alternate endpoint without the /0/ startPositionTicks segment
-  const altUrl = primaryUrl.replace(/\/Subtitles\/(\d+)\/0\/Stream\.vtt/i, '/Subtitles/$1/Stream.vtt');
-  if (altUrl !== primaryUrl) {
-    candidateUrls.push(altUrl);
+  const cacheKey = primaryUrl.split('?')[0];
+  const cached = subtitleCueCache.get(cacheKey);
+  if (cached && cached.length > 0) {
+    return cached;
+  }
+
+  const candidateUrls: string[] = [primaryUrl];
+  // Alternate 1: Jellyfin endpoint without the /0/ startPositionTicks segment
+  const altNoZero = primaryUrl.replace(/\/Subtitles\/(\d+)\/0\/Stream\.vtt/i, '/Subtitles/$1/Stream.vtt');
+  if (altNoZero !== primaryUrl) {
+    candidateUrls.push(altNoZero);
+  }
+  // Alternate 2: Raw SRT endpoint (parseWebVtt supports both WebVTT and SRT natively!)
+  const altSrt = primaryUrl.replace(/\/Stream\.vtt/i, '/Stream.srt');
+  if (altSrt !== primaryUrl) {
+    candidateUrls.push(altSrt);
   }
 
   let lastError: Error | null = null;
@@ -124,7 +137,7 @@ export async function fetchSubtitleCues(
   for (const url of candidateUrls) {
     try {
       const controller = new AbortController();
-      const timeout = window.setTimeout(() => controller.abort(), 35_000);
+      const timeout = window.setTimeout(() => controller.abort(), 90_000);
       const onExternalAbort = () => controller.abort();
       signal?.addEventListener('abort', onExternalAbort, { once: true });
 
@@ -143,6 +156,7 @@ export async function fetchSubtitleCues(
         const text = await res.text();
         const cues = parseWebVtt(text);
         if (cues.length > 0) {
+          subtitleCueCache.set(cacheKey, cues);
           return cues;
         }
         lastError = new Error('Subtitle track returned no cues');
@@ -164,8 +178,7 @@ export function getActiveSubtitleLines(cues: SubtitleCue[], currentTime: number)
   const active: string[] = [];
   for (let i = 0; i < cues.length; i++) {
     const c = cues[i];
-    if (c.start > currentTime) break;
-    if (c.end >= currentTime) {
+    if (c.start <= currentTime && c.end >= currentTime) {
       active.push(c.text);
     }
   }
