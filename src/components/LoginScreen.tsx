@@ -19,6 +19,7 @@ import {
   createDemoSession,
   fetchPublicUsers,
   loadSavedProfiles,
+  pruneHiddenSavedProfiles,
   removeSavedProfile,
   saveSession,
 } from '../services/jellyfin';
@@ -77,10 +78,14 @@ export const LoginScreen: React.FC<LoginScreenProps> = ({
   useEffect(() => {
     let active = true;
     fetchPublicUsers(serverUrl).then((list) => {
-      if (!active) return;
+      if (!active || list === null) return;
+      const pruned = pruneHiddenSavedProfiles(serverUrl, new Set(list.map((u) => u.id)));
+      setSavedProfiles(pruned);
       setPublicUsers(list);
-      if (list.length > 0 && savedProfiles.length === 0 && !username) {
+      if (list.length > 0 && pruned.length === 0 && !username) {
         setShowLoginForm(false);
+      } else if (list.length === 0 && pruned.length === 0) {
+        setShowLoginForm(true);
       }
     });
     return () => {

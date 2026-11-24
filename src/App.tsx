@@ -15,6 +15,7 @@ import {
 } from './services/appUpdate';
 import {
   SessionExpiredError,
+  clearCachedLibrary,
   clearSession,
   fetchLibraryItems,
   fetchResumeItems,
@@ -364,19 +365,29 @@ export const App: React.FC = () => {
   useEffect(() => {
     if (!session) return;
     if (!session.isDemo) {
-      const cached = loadCachedLibrary(session.userId);
-      if (cached) {
-        setItems(cached.items);
-        setResumeItems(cached.resumeItems);
-      } else {
+      if (session.isHidden) {
+        clearCachedLibrary(session.userId);
         setItems([]);
         setResumeItems([]);
+      } else {
+        const cached = loadCachedLibrary(session.userId);
+        if (cached) {
+          setItems(cached.items);
+          setResumeItems(cached.resumeItems);
+        } else {
+          setItems([]);
+          setResumeItems([]);
+        }
       }
     }
     loadLibrary(session);
-    if (!session.isDemo && session.isAdmin === undefined) {
+    if (!session.isDemo) {
       refreshSessionProfile(session).then((refreshed) => {
-        if (refreshed.isAdmin !== session.isAdmin) {
+        if (
+          refreshed.isAdmin !== session.isAdmin ||
+          refreshed.isHidden !== session.isHidden ||
+          refreshed.username !== session.username
+        ) {
           setSession(refreshed);
         }
       });
@@ -396,6 +407,9 @@ export const App: React.FC = () => {
   const handleSignOut = () => {
     if (session && !session.isDemo) {
       removeSavedProfile(session.userId);
+      if (session.isHidden) {
+        clearCachedLibrary(session.userId);
+      }
     }
     clearSession();
     setSession(null);

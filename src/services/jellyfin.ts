@@ -107,6 +107,14 @@ export function saveCachedLibrary(
   }
 }
 
+export function clearCachedLibrary(userId: string): void {
+  try {
+    localStorage.removeItem(`${LIBRARY_CACHE_PREFIX}${userId}`);
+  } catch {
+    // Ignore storage errors
+  }
+}
+
 function getDeviceId(): string {
   let id = localStorage.getItem(DEVICE_ID_KEY);
   if (!id) {
@@ -133,11 +141,16 @@ export function loadSavedProfiles(): AuthSession[] {
   try {
     const raw = localStorage.getItem(SAVED_PROFILES_KEY);
     const list = raw ? (JSON.parse(raw) as AuthSession[]) : [];
-    // Security: NEVER keep administrator tokens in the 1-tap device switcher vault.
-    // Non-admin family members can switch between their own profiles on a shared TV/tablet,
-    // while switching into an admin account always requires entering the admin password.
+    // Security: NEVER keep administrator, hidden, or unverified legacy tokens in the
+    // 1-tap device switcher vault. Only explicitly non-hidden (isHidden === false)
+    // non-admin family profiles may be remembered on shared devices.
     const safeNonAdmin = list.filter(
-      (p) => !p.isDemo && !p.isAdmin && !p.isHidden && Boolean(p.accessToken) && Boolean(p.userId)
+      (p) =>
+        !p.isDemo &&
+        !p.isAdmin &&
+        p.isHidden === false &&
+        Boolean(p.accessToken) &&
+        Boolean(p.userId)
     );
     if (safeNonAdmin.length !== list.length) {
       localStorage.setItem(SAVED_PROFILES_KEY, JSON.stringify(safeNonAdmin));
@@ -147,7 +160,7 @@ export function loadSavedProfiles(): AuthSession[] {
       current &&
       !current.isDemo &&
       !current.isAdmin &&
-      !current.isHidden &&
+      current.isHidden === false &&
       !safeNonAdmin.some((p) => p.userId === current.userId)
     ) {
       const merged = [current, ...safeNonAdmin];
@@ -164,14 +177,42 @@ export function upsertSavedProfile(session: AuthSession): void {
   if (session.isDemo) return;
   try {
     const existing = loadSavedProfiles().filter((p) => p.userId !== session.userId);
-    // Never cache administrator or hidden private sessions in the 1-tap switcher
-    if (session.isAdmin || session.isHidden) {
+    // Never cache administrator, hidden, or unverified sessions in the 1-tap switcher
+    if (session.isAdmin || session.isHidden !== false) {
       localStorage.setItem(SAVED_PROFILES_KEY, JSON.stringify(existing));
+      if (session.isHidden) {
+        clearCachedLibrary(session.userId);
+      }
       return;
     }
     localStorage.setItem(SAVED_PROFILES_KEY, JSON.stringify([session, ...existing]));
   } catch {
     // Ignore storage errors
+  }
+}
+
+export function pruneHiddenSavedProfiles(
+  serverUrl: string,
+  publicUserIds: Set<string>
+): AuthSession[] {
+  try {
+    const cleanUrl = normalizeServerUrl(serverUrl);
+    const existing = loadSavedProfiles();
+    const kept: AuthSession[] = [];
+    for (const profile of existing) {
+      const sameServer = normalizeServerUrl(profile.serverUrl) === cleanUrl;
+      if (sameServer && !publicUserIds.has(profile.userId)) {
+        clearCachedLibrary(profile.userId);
+        continue;
+      }
+      kept.push(profile);
+    }
+    if (kept.length !== existing.length) {
+      localStorage.setItem(SAVED_PROFILES_KEY, JSON.stringify(kept));
+    }
+    return kept;
+  } catch {
+    return [];
   }
 }
 
@@ -186,16 +227,35 @@ export function removeSavedProfile(userId: string): void {
 
 export function loadSavedSession(): AuthSession | null {
   try {
-    const raw = localStorage.getItem(SESSION_STORAGE_KEY);
-    if (!raw) return null;
-    return JSON.parse(raw) as AuthSession;
+    const sessionRaw = sessionStorage.getItem(SESSION_STORAGE_KEY);
+    if (sessionRaw) return JSON.parse(sessionRaw) as AuthSession;
+    const localRaw = localStorage.getItem(SESSION_STORAGE_KEY);
+    if (!localRaw) return null;
+    return JSON.parse(localRaw) as AuthSession;
   } catch {
     return null;
   }
 }
 
 export function saveSession(session: AuthSession): void {
-  localStorage.setItem(SESSION_STORAGE_KEY, JSON.stringify(session));
+  if (session.isHidden) {
+    // Hidden/private accounts live only in sessionStorage so closing the browser tab
+    // or TV app automatically signs them out with zero persistent trace on the device.
+    try {
+      sessionStorage.setItem(SESSION_STORAGE_KEY, JSON.stringify(session));
+    } catch {
+      // Ignore storage errors
+    }
+    localStorage.removeItem(SESSION_STORAGE_KEY);
+    clearCachedLibrary(session.userId);
+  } else {
+    localStorage.setItem(SESSION_STORAGE_KEY, JSON.stringify(session));
+    try {
+      sessionStorage.removeItem(SESSION_STORAGE_KEY);
+    } catch {
+      // Ignore storage errors
+    }
+  }
   if (!session.isDemo) {
     upsertSavedProfile(session);
   }
@@ -203,6 +263,11 @@ export function saveSession(session: AuthSession): void {
 
 export function clearSession(): void {
   localStorage.removeItem(SESSION_STORAGE_KEY);
+  try {
+    sessionStorage.removeItem(SESSION_STORAGE_KEY);
+  } catch {
+    // Ignore storage errors
+  }
 }
 
 export function createDemoSession(): AuthSession {
@@ -272,8 +337,8 @@ export async function authenticateJellyfin(
 }
 
 /**
- * Refreshes user metadata (including IsAdministrator) from Jellyfin so already-signed-in
- * admin sessions automatically unlock the Family Manager without re-entering credentials.
+ * Refreshes user metadata (including IsAdministrator and IsHidden) from Jellyfin so
+ * admin privileges and privacy flags stay strictly synced with server policy.
  */
 export async function refreshSessionProfile(session: AuthSession): Promise<AuthSession> {
   if (session.isDemo) return session;
@@ -287,6 +352,7 @@ export async function refreshSessionProfile(session: AuthSession): Promise<AuthS
       ...session,
       username: data.Name || session.username,
       isAdmin: Boolean(data.Policy?.IsAdministrator),
+      isHidden: Boolean(data.Policy?.IsHidden),
     };
     saveSession(updated);
     return updated;
@@ -295,11 +361,11 @@ export async function refreshSessionProfile(session: AuthSession): Promise<AuthS
   }
 }
 
-export async function fetchPublicUsers(serverUrl: string): Promise<PublicUserProfile[]> {
+export async function fetchPublicUsers(serverUrl: string): Promise<PublicUserProfile[] | null> {
   try {
     const cleanUrl = normalizeServerUrl(serverUrl);
     const res = await fetch(`${cleanUrl}/Users/Public`);
-    if (!res.ok) return [];
+    if (!res.ok) return null;
     const data = (await res.json()) as Array<{
       Id: string;
       Name: string;
@@ -315,7 +381,7 @@ export async function fetchPublicUsers(serverUrl: string): Promise<PublicUserPro
         : undefined,
     }));
   } catch {
-    return [];
+    return null;
   }
 }
 
