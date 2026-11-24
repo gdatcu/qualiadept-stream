@@ -138,7 +138,7 @@ export function loadSavedProfiles(): AuthSession[] {
     // Non-admin family members can switch between their own profiles on a shared TV/tablet,
     // while switching into an admin account always requires entering the admin password.
     const safeNonAdmin = list.filter(
-      (p) => !p.isDemo && !p.isAdmin && Boolean(p.accessToken) && Boolean(p.userId)
+      (p) => !p.isDemo && !p.isAdmin && !p.isHidden && Boolean(p.accessToken) && Boolean(p.userId)
     );
     if (safeNonAdmin.length !== list.length) {
       localStorage.setItem(SAVED_PROFILES_KEY, JSON.stringify(safeNonAdmin));
@@ -148,6 +148,7 @@ export function loadSavedProfiles(): AuthSession[] {
       current &&
       !current.isDemo &&
       !current.isAdmin &&
+      !current.isHidden &&
       !safeNonAdmin.some((p) => p.userId === current.userId)
     ) {
       const merged = [current, ...safeNonAdmin];
@@ -164,8 +165,8 @@ export function upsertSavedProfile(session: AuthSession): void {
   if (session.isDemo) return;
   try {
     const existing = loadSavedProfiles().filter((p) => p.userId !== session.userId);
-    // Never cache administrator sessions in the 1-tap switcher
-    if (session.isAdmin) {
+    // Never cache administrator or hidden private sessions in the 1-tap switcher
+    if (session.isAdmin || session.isHidden) {
       localStorage.setItem(SAVED_PROFILES_KEY, JSON.stringify(existing));
       return;
     }
@@ -265,6 +266,7 @@ export async function authenticateJellyfin(
     username: data.User.Name,
     isDemo: false,
     isAdmin: Boolean(data.User?.Policy?.IsAdministrator),
+    isHidden: Boolean(data.User?.Policy?.IsHidden),
   };
   saveSession(session);
   return session;
@@ -377,7 +379,7 @@ function mapJellyfinItem(raw: RawJellyfinItem, session: AuthSession): MediaItem 
   return {
     id: raw.Id,
     name: raw.Name,
-    type: (raw.Type as MediaType) || 'Movie',
+    type: raw.Type === 'Series' ? 'Series' : raw.Type === 'Episode' ? 'Episode' : 'Movie',
     overview: raw.Overview || 'No description available.',
     year: raw.ProductionYear,
     rating: raw.CommunityRating ? Number(raw.CommunityRating.toFixed(1)) : undefined,
@@ -413,7 +415,7 @@ export async function fetchLibraryItems(session: AuthSession): Promise<MediaItem
   }
 
   const params = new URLSearchParams({
-    IncludeItemTypes: 'Movie,Series',
+    IncludeItemTypes: 'Movie,Series,Video',
     Recursive: 'true',
     SortBy: 'DateCreated,SortName',
     SortOrder: 'Descending',

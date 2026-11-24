@@ -178,7 +178,7 @@ export const App: React.FC = () => {
       fetchResumeItems(activeSession)
         .then((nextResume) => {
           setResumeItems(nextResume);
-          if (itemsRef.current.length > 0) {
+          if (!activeSession.isHidden && itemsRef.current.length > 0) {
             saveCachedLibrary(activeSession.userId, itemsRef.current, nextResume);
           }
         })
@@ -192,7 +192,10 @@ export const App: React.FC = () => {
 
   const loadLibrary = useCallback(
     async (activeSession: AuthSession, options?: { background?: boolean }) => {
-      const cached = !activeSession.isDemo ? loadCachedLibrary(activeSession.userId) : null;
+      const cached =
+        !activeSession.isDemo && !activeSession.isHidden
+          ? loadCachedLibrary(activeSession.userId)
+          : null;
       const hasVisibleCatalog = Boolean(options?.background || (cached && cached.items.length > 0));
 
       if (!hasVisibleCatalog) {
@@ -207,7 +210,7 @@ export const App: React.FC = () => {
         lastSyncTsRef.current = Date.now();
         setItems(library);
         setResumeItems(resume);
-        if (!activeSession.isDemo) {
+        if (!activeSession.isDemo && !activeSession.isHidden) {
           saveCachedLibrary(activeSession.userId, library, resume);
         }
       } catch (err) {

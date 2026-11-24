@@ -92,6 +92,7 @@ export interface AuthSession {
   username: string;
   isDemo: boolean;
   isAdmin?: boolean;
+  isHidden?: boolean;
 }
 
 export type ParentalTier = 'adult' | 'teen' | 'kids';
