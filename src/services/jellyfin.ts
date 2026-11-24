@@ -6,7 +6,6 @@ import {
   type AuthSession,
   type FamilyUser,
   type MediaItem,
-  type MediaType,
   type ParentalTier,
   type PlaybackInfo,
   type PublicUserProfile,
