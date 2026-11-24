@@ -4,15 +4,21 @@ import {
   ArrowLeft,
   Cast,
   Check,
+  ChevronLeft,
+  ChevronRight,
   HardDrive,
+  Heart,
+  Info,
   Maximize,
   Minimize,
   Pause,
   Play,
   RefreshCw,
+  Repeat,
   RotateCcw,
   RotateCw,
   Settings,
+  SkipBack,
   SkipForward,
   Subtitles,
   Sun,
@@ -21,6 +27,7 @@ import {
   X,
 } from 'lucide-react';
 import {
+  fetchItemDetails,
   fetchNextEpisode,
   getCastPlaybackInfo,
   getPlaybackInfo,
@@ -31,8 +38,10 @@ import { getOfflinePlaybackInfo } from '../services/offlineDownloads';
 import {
   QUALITY_OPTIONS,
   type AuthSession,
+  type ChapterItem,
   type MediaItem,
   type PlaybackInfo,
+  type PlaybackStartOptions,
   type QualityPreset,
   type SubtitleTrack,
 } from '../types/media';
@@ -67,11 +76,26 @@ import {
 } from '../utils/subtitles';
 import { isTizenTv } from '../utils/tvNavigation';
 
+type AspectRatioMode = 'auto' | 'cover' | 'zoom' | 'fill';
+type RepeatMode = 'none' | 'one';
+type SettingsSubPanel = 'root' | 'quality' | 'aspect' | 'speed' | 'repeat';
+
+const ASPECT_RATIO_OPTIONS: Array<{ id: AspectRatioMode; label: string; description: string }> = [
+  { id: 'auto', label: 'Auto', description: 'Original picture aspect ratio' },
+  { id: 'cover', label: 'Cover / Fill', description: 'Eliminate black bars by filling screen' },
+  { id: 'zoom', label: 'Zoom (115%)', description: 'Slight cinematic zoom for ultrawide films' },
+  { id: 'fill', label: 'Stretch', description: 'Stretch video to fill full frame' },
+];
+
+const PLAYBACK_SPEEDS = [0.5, 0.75, 1, 1.25, 1.5, 1.75, 2];
+
 interface VideoPlayerProps {
   session: AuthSession;
   item: MediaItem;
+  startOptions?: PlaybackStartOptions;
   onClose: () => void;
   onPlayNext?: (nextItem: MediaItem) => void;
+  onToggleFavorite?: (item: MediaItem) => void;
 }
 
 const BRIGHTNESS_STORAGE_KEY = 'qualiadept_player_brightness_v1';
@@ -117,8 +141,10 @@ function getBufferAheadSeconds(video: HTMLVideoElement): number {
 export const VideoPlayer: React.FC<VideoPlayerProps> = ({
   session,
   item,
+  startOptions,
   onClose,
   onPlayNext,
+  onToggleFavorite,
 }) => {
   const containerRef = useRef<HTMLDivElement>(null);
   const videoRef = useRef<HTMLVideoElement>(null);
@@ -129,7 +155,10 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
   const qualityBtnRef = useRef<HTMLButtonElement>(null);
   const subBtnRef = useRef<HTMLButtonElement>(null);
   const isTv = isTizenTv();
-  const resumeOverrideRef = useRef<number | null>(null);
+  const resumeOverrideRef = useRef<number | null>(
+    startOptions?.startFromBeginning ? 0 : null
+  );
+  const appliedStartSubItemIdRef = useRef<string | null>(null);
   const swipeStartRef = useRef<{ y: number; startBrightness: number; moved: boolean } | null>(null);
   const brightnessHudTimerRef = useRef<number | null>(null);
   const adaptiveNoticeTimerRef = useRef<number | null>(null);
@@ -177,13 +206,23 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
   const [isDraggingBrightness, setIsDraggingBrightness] = useState(false);
   const [showBrightnessHud, setShowBrightnessHud] = useState(false);
 
-  const [selectedAudioIndex, setSelectedAudioIndex] = useState<number | null>(null);
+  const [selectedAudioIndex, setSelectedAudioIndex] = useState<number | null>(
+    startOptions?.audioIndex ?? null
+  );
   const [activeTextSubIndex, setActiveTextSubIndex] = useState<number | null>(null);
   const [burnInSubIndex, setBurnInSubIndex] = useState<number | null>(null);
   const [subtitleCues, setSubtitleCues] = useState<SubtitleCue[]>([]);
   const [loadingSubtitles, setLoadingSubtitles] = useState(false);
   const [showSubMenu, setShowSubMenu] = useState(false);
   const [showQualityMenu, setShowQualityMenu] = useState(false);
+
+  // Pro Cinema Player settings (Aspect Ratio, Speed, Repeat, Chapters, Playback Info)
+  const [settingsPanel, setSettingsPanel] = useState<SettingsSubPanel>('root');
+  const [aspectRatio, setAspectRatio] = useState<AspectRatioMode>('auto');
+  const [playbackSpeed, setPlaybackSpeed] = useState<number>(1);
+  const [repeatMode, setRepeatMode] = useState<RepeatMode>('none');
+  const [showPlaybackInfo, setShowPlaybackInfo] = useState(false);
+  const [chapters, setChapters] = useState<ChapterItem[]>([]);
 
   // Auto-Play Next Episode state
   const [nextEpisode, setNextEpisode] = useState<MediaItem | null>(null);
@@ -407,15 +446,17 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
     setNextEpisode(null);
     setNextCountdown(null);
     setNextDismissed(false);
-    setSelectedAudioIndex(null);
+    setSelectedAudioIndex(startOptions?.audioIndex ?? null);
     setActiveTextSubIndex(null);
     setBurnInSubIndex(null);
     setSubtitleCues([]);
     setLoadingSubtitles(false);
     setForceHls(false);
     setUseNativeHls(false);
+    setChapters([]);
     setStreamStatus('Preparing stream...');
-    resumeOverrideRef.current = null;
+    resumeOverrideRef.current = startOptions?.startFromBeginning ? 0 : null;
+    appliedStartSubItemIdRef.current = null;
     stallTimestampsRef.current = [];
     hasStartedPlayingRef.current = false;
     userPausedRef.current = false;
@@ -423,6 +464,12 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
     if (!manualQualityLockedRef.current) {
       setQuality(getRecommendedQuality());
     }
+
+    fetchItemDetails(session, item.id).then((d) => {
+      if (active && d?.chapters?.length) {
+        setChapters(d.chapters);
+      }
+    });
 
     if (item.type === 'Episode') {
       fetchNextEpisode(session, item).then((ep) => {
@@ -432,7 +479,38 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
     return () => {
       active = false;
     };
-  }, [session, item]);
+  }, [session, item, startOptions]);
+
+  // Apply pre-selected subtitle from DetailModal once playback tracks arrive
+  useEffect(() => {
+    if (!playback) return;
+    if (appliedStartSubItemIdRef.current === item.id) return;
+    appliedStartSubItemIdRef.current = item.id;
+    const desired = startOptions?.subtitleIndex;
+    if (desired === undefined || desired === null) return;
+    const match = playback.subtitles.find((s) => s.index === desired);
+    if (!match) return;
+    if (match.isText) {
+      setActiveTextSubIndex(match.index);
+    } else {
+      resumeOverrideRef.current = videoRef.current?.currentTime || item.resumePositionSeconds || 0;
+      setBurnInSubIndex(match.index);
+    }
+  }, [playback, item.id, item.resumePositionSeconds, startOptions]);
+
+  // Keep HTML5 video playbackRate synced with selected Playback Speed
+  useEffect(() => {
+    if (videoRef.current) {
+      videoRef.current.playbackRate = playbackSpeed;
+    }
+  }, [playbackSpeed, playback]);
+
+  // Reset Settings menu back to root panel whenever closed
+  useEffect(() => {
+    if (!showQualityMenu) {
+      setSettingsPanel('root');
+    }
+  }, [showQualityMenu]);
 
   // Fetch stream URL (preferring local offline OPFS download when available!) whenever item, quality, audio, burn-in, or retry changes
   useEffect(() => {
@@ -1755,6 +1833,64 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
   );
   const volumePct = Math.max(0, Math.min(100, (displayMuted ? 0 : displayVolume) * 100));
 
+  const currentChapter = (() => {
+    if (chapters.length === 0) return null;
+    let active: ChapterItem | null = null;
+    for (const ch of chapters) {
+      if (ch.startSeconds <= displayCurrentTime + 1) active = ch;
+      else break;
+    }
+    return active;
+  })();
+
+  const jumpToChapter = (dir: 'prev' | 'next') => {
+    if (chapters.length === 0) return;
+    const ct = displayCurrentTime;
+    let targetSec: number | null = null;
+    if (dir === 'next') {
+      const next = chapters.find((ch) => ch.startSeconds > ct + 2);
+      if (next) targetSec = next.startSeconds;
+    } else {
+      for (let i = chapters.length - 1; i >= 0; i--) {
+        if (chapters[i].startSeconds < ct - 4) {
+          targetSec = chapters[i].startSeconds;
+          break;
+        }
+      }
+      if (targetSec === null) targetSec = 0;
+    }
+    if (targetSec !== null) {
+      if (isCasting) {
+        seekChromecast(targetSec);
+      } else if (videoRef.current) {
+        videoRef.current.currentTime = targetSec;
+        setCurrentTime(targetSec);
+      }
+      bumpControls();
+    }
+  };
+
+  const endsAtLabel = (() => {
+    if (displayDuration <= 0) return null;
+    const remainingSec = Math.max(0, (displayDuration - displayCurrentTime) / playbackSpeed);
+    const endDate = new Date(Date.now() + remainingSec * 1000);
+    return endDate.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
+  })();
+
+  const activeAspectLabel =
+    ASPECT_RATIO_OPTIONS.find((a) => a.id === aspectRatio)?.label || 'Auto';
+
+  const videoAspectClass =
+    aspectRatio === 'cover'
+      ? 'h-full w-full object-cover'
+      : aspectRatio === 'fill'
+      ? 'h-full w-full object-fill'
+      : aspectRatio === 'zoom'
+      ? 'h-full w-full object-contain scale-[1.15]'
+      : 'h-full w-full object-contain';
+
+  const videoPlaybackQuality = videoRef.current?.getVideoPlaybackQuality?.();
+
   return (
     <div
       ref={containerRef}
@@ -1792,6 +1928,9 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
           if (streamStartedAtRef.current === 0) {
             streamStartedAtRef.current = Date.now();
           }
+          if (videoRef.current && videoRef.current.playbackRate !== playbackSpeed) {
+            videoRef.current.playbackRate = playbackSpeed;
+          }
           setPlaying(true);
           setBuffering(false);
           setLoading(false);
@@ -1816,6 +1955,11 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
           setShowControls(true);
         }}
         onEnded={() => {
+          if (repeatMode === 'one' && videoRef.current) {
+            videoRef.current.currentTime = 0;
+            videoRef.current.play().catch(() => {});
+            return;
+          }
           if (nextEpisode && onPlayNext && !nextDismissed) {
             onPlayNext(nextEpisode);
           }
@@ -1827,8 +1971,101 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
           filter: brightness !== 1 ? `brightness(${brightness})` : undefined,
         }}
         {...({ 'x-webkit-airplay': 'allow' } as Record<string, string>)}
-        className="h-full w-full object-contain"
+        className={`${videoAspectClass} transition-transform duration-200`}
       />
+
+      {/* Playback Info ("Stats for Nerds") Translucent Overlay */}
+      {showPlaybackInfo && (
+        <div className="pointer-events-auto absolute top-20 left-4 sm:left-6 z-30 w-72 sm:w-80 rounded-2xl border border-white/15 bg-black/80 p-3.5 text-[11px] text-zinc-200 shadow-2xl backdrop-blur-md">
+          <div className="mb-2 flex items-center justify-between border-b border-white/10 pb-1.5">
+            <span className="flex items-center gap-1.5 font-bold uppercase tracking-wider text-violet-300">
+              <Info className="h-3.5 w-3.5" />
+              Playback Info
+            </span>
+            <button
+              onClick={() => setShowPlaybackInfo(false)}
+              className="rounded p-0.5 text-zinc-400 hover:bg-white/10 hover:text-white"
+            >
+              <X className="h-3.5 w-3.5" />
+            </button>
+          </div>
+          <div className="space-y-1 font-mono text-[11px]">
+            <div className="flex justify-between gap-2">
+              <span className="text-zinc-400">Play Method</span>
+              <span className="font-semibold text-emerald-300">
+                {offlineQualityLabel
+                  ? 'Offline OPFS'
+                  : playback?.isHls
+                  ? useNativeHls
+                    ? 'Native HLS'
+                    : 'HLS (Remux/Transcode)'
+                  : 'Direct Play'}
+              </span>
+            </div>
+            <div className="flex justify-between gap-2">
+              <span className="text-zinc-400">Resolution</span>
+              <span>
+                {videoRef.current?.videoWidth && videoRef.current?.videoHeight
+                  ? `${videoRef.current.videoWidth}×${videoRef.current.videoHeight}`
+                  : playback?.sourceWidth && playback?.sourceHeight
+                  ? `${playback.sourceWidth}×${playback.sourceHeight}`
+                  : 'Detecting...'}
+              </span>
+            </div>
+            {playback?.videoCodec && (
+              <div className="flex justify-between gap-2">
+                <span className="text-zinc-400">Video</span>
+                <span>
+                  {playback.videoCodec}
+                  {playback.videoRange ? ` · ${playback.videoRange}` : ''}
+                  {playback.container ? ` (${playback.container})` : ''}
+                </span>
+              </div>
+            )}
+            {playback?.audioCodec && (
+              <div className="flex justify-between gap-2">
+                <span className="text-zinc-400">Audio</span>
+                <span>
+                  {playback.audioCodec}
+                  {playback.audioChannels
+                    ? ` · ${
+                        playback.audioChannels === 6
+                          ? '5.1'
+                          : playback.audioChannels === 8
+                          ? '7.1'
+                          : `${playback.audioChannels}ch`
+                      }`
+                    : ''}
+                </span>
+              </div>
+            )}
+            {playback?.sourceBitrate && (
+              <div className="flex justify-between gap-2">
+                <span className="text-zinc-400">Source Bitrate</span>
+                <span>{(playback.sourceBitrate / 1_000_000).toFixed(1)} Mbps</span>
+              </div>
+            )}
+            <div className="flex justify-between gap-2">
+              <span className="text-zinc-400">Buffer Ahead</span>
+              <span>{bufferAheadSec}s</span>
+            </div>
+            <div className="flex justify-between gap-2">
+              <span className="text-zinc-400">Speed / Aspect</span>
+              <span>
+                {playbackSpeed}x · {activeAspectLabel}
+              </span>
+            </div>
+            {videoPlaybackQuality && (
+              <div className="flex justify-between gap-2">
+                <span className="text-zinc-400">Dropped Frames</span>
+                <span>
+                  {videoPlaybackQuality.droppedVideoFrames} / {videoPlaybackQuality.totalVideoFrames}
+                </span>
+              </div>
+            )}
+          </div>
+        </div>
+      )}
 
       {/* Custom WebVTT Subtitle Overlay (works identically on Mobile Chrome, Android APK, Desktop & Samsung TV) */}
       {!castDeviceName && !error && (subtitleCues.length > 0 || loadingSubtitles) && (() => {
@@ -2267,7 +2504,21 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
           showControls || isCasting ? 'opacity-100' : 'opacity-0 pointer-events-none'
         }`}
       >
-        {/* 3-Layer Colored Timeline Progress Bar (Elapsed Gradient + Buffered Cushion + Unplayed Track) */}
+        {/* Optional Current Chapter Label */}
+        {currentChapter && chapters.length > 1 && (
+          <div className="mb-1 flex items-center justify-between px-1 text-[11px] font-semibold text-zinc-300">
+            <span className="truncate max-w-[70%] text-violet-200/90">
+              {currentChapter.name}
+            </span>
+            {playbackSpeed !== 1 && (
+              <span className="rounded bg-violet-500/25 px-1.5 py-0.5 font-mono text-[10px] font-bold text-violet-200">
+                {playbackSpeed}x
+              </span>
+            )}
+          </div>
+        )}
+
+        {/* 3-Layer Colored Timeline Progress Bar (Elapsed Gradient + Buffered Cushion + Chapter Ticks) */}
         <div data-tv-row="timeline" className="mb-3 sm:mb-4 flex items-center gap-2.5 sm:gap-3.5">
           <span className="w-11 sm:w-14 text-[11px] sm:text-xs font-mono font-bold text-fuchsia-300 tabular-nums">
             {formatTime(displayCurrentTime)}
@@ -2289,6 +2540,20 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
                 className="absolute inset-y-0 left-0 rounded-full bg-gradient-to-r from-violet-500 via-fuchsia-500 to-pink-400 shadow-[0_0_12px_rgba(217,70,239,0.75)]"
                 style={{ width: `${playedPct}%` }}
               />
+              {/* Chapter Marker Ticks */}
+              {displayDuration > 0 &&
+                chapters.map((ch, idx) => {
+                  if (ch.startSeconds <= 0 || ch.startSeconds >= displayDuration) return null;
+                  const pct = (ch.startSeconds / safeDuration) * 100;
+                  return (
+                    <div
+                      key={`${ch.startSeconds}-${idx}`}
+                      title={ch.name}
+                      className="pointer-events-none absolute top-0 bottom-0 w-[2px] bg-black/75"
+                      style={{ left: `${pct}%` }}
+                    />
+                  );
+                })}
             </div>
             {/* Glowing Scrubber Handle */}
             <div
@@ -2334,7 +2599,7 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
 
         {/* Control Buttons */}
         <div data-tv-row="bottom" className="flex items-center justify-between gap-1 sm:gap-2">
-          <div className="flex items-center gap-1 sm:gap-2.5 min-w-0">
+          <div className="flex items-center gap-1 sm:gap-2 min-w-0">
             <button
               type="button"
               onClick={(e) => {
@@ -2351,6 +2616,16 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
               )}
             </button>
 
+            {chapters.length > 1 && (
+              <button
+                onClick={() => jumpToChapter('prev')}
+                title="Previous chapter"
+                className="hidden sm:inline-flex rounded-lg p-1.5 sm:p-2 text-zinc-200 transition hover:bg-white/10 focus:outline-none focus:ring-2 focus:ring-violet-400"
+              >
+                <SkipBack className="h-4 w-4 sm:h-5 sm:w-5" />
+              </button>
+            )}
+
             <button
               onClick={() => seekBy(-10)}
               title="Back 10s"
@@ -2366,6 +2641,16 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
             >
               <RotateCw className="h-4 w-4 sm:h-5 sm:w-5" />
             </button>
+
+            {chapters.length > 1 && (
+              <button
+                onClick={() => jumpToChapter('next')}
+                title="Next chapter"
+                className="hidden sm:inline-flex rounded-lg p-1.5 sm:p-2 text-zinc-200 transition hover:bg-white/10 focus:outline-none focus:ring-2 focus:ring-violet-400"
+              >
+                <SkipForward className="h-4 w-4 sm:h-5 sm:w-5" />
+              </button>
+            )}
 
             {nextEpisode && onPlayNext && (
               <button
@@ -2440,10 +2725,38 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
                 </div>
               </div>
             )}
+
+            {/* Live Finish-Time Indicator ("Ends at 6:16 PM") */}
+            {endsAtLabel && (
+              <span className="hidden lg:inline-flex items-center gap-1.5 pl-2 text-xs font-medium text-zinc-300 tabular-nums">
+                Ends at {endsAtLabel}
+                {repeatMode === 'one' && (
+                  <Repeat className="h-3.5 w-3.5 text-violet-400" />
+                )}
+              </span>
+            )}
           </div>
 
-          <div className="relative flex items-center gap-1.5 sm:gap-2.5 flex-shrink-0">
-            {/* Quality Selector */}
+          <div className="relative flex items-center gap-1.5 sm:gap-2 flex-shrink-0">
+            {/* Favorite Heart Toggle */}
+            {onToggleFavorite && (
+              <button
+                onClick={() => {
+                  onToggleFavorite(item);
+                  bumpControls();
+                }}
+                title={item.isFavorite ? 'Remove from Favorites' : 'Add to Favorites'}
+                className={`rounded-lg p-1.5 sm:p-2 transition hover:bg-white/10 focus:outline-none focus:ring-2 focus:ring-violet-400 ${
+                  item.isFavorite ? 'text-rose-400' : 'text-zinc-200'
+                }`}
+              >
+                <Heart
+                  className={`h-4 w-4 sm:h-5 sm:w-5 ${item.isFavorite ? 'fill-rose-400' : ''}`}
+                />
+              </button>
+            )}
+
+            {/* Unified Settings Menu (Aspect Ratio, Playback Speed, Quality, Repeat Mode, Playback Info) */}
             <div className="relative">
               <button
                 ref={qualityBtnRef}
@@ -2452,6 +2765,7 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
                   setShowSubMenu(false);
                   bumpControls();
                 }}
+                title="Playback Settings"
                 className={`flex items-center gap-1.5 rounded-xl bg-white/15 font-semibold text-white transition hover:bg-white/25 focus:outline-none focus:ring-2 focus:ring-violet-400 ${
                   isTv ? 'px-3.5 py-2 text-xs' : 'px-2 py-1.5 sm:px-2.5 text-[11px] sm:text-xs'
                 }`}
@@ -2468,8 +2782,8 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
                     <Settings className="h-4 w-4 text-violet-300" />
                     <span className="max-w-[92px] truncate sm:max-w-none">
                       {autoStability
-                        ? `${isTv ? 'Quality: ' : ''}Auto · ${activeQualityLabel.replace(' HD', '').replace(' SD', '')}`
-                        : `${isTv ? 'Quality: ' : ''}${activeQualityLabel}`}
+                        ? `${isTv ? 'Settings · ' : ''}Auto · ${activeQualityLabel.replace(' HD', '').replace(' SD', '')}`
+                        : `${isTv ? 'Settings · ' : ''}${activeQualityLabel}`}
                     </span>
                   </>
                 )}
@@ -2481,84 +2795,265 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
                     isTv ? 'sm:w-96 p-3' : 'sm:w-72'
                   }`}
                 >
-                  <div className="flex items-center justify-between px-3 py-1.5">
-                    <span className="text-[11px] font-bold uppercase tracking-wider text-zinc-300">
-                      Stream Quality
-                    </span>
-                    {isTv ? (
-                      <span className="text-[10px] font-medium text-zinc-400">↩ Back to close</span>
-                    ) : (
-                      <button
-                        onClick={() => setShowQualityMenu(false)}
-                        className="rounded-lg p-1 text-zinc-400 hover:bg-white/10 hover:text-white sm:hidden"
-                      >
-                        <X className="h-4 w-4" />
-                      </button>
-                    )}
-                  </div>
-
-                  {/* Live Network & Buffer Health Strip */}
-                  <div className="mx-1 mb-1.5 flex items-center justify-between rounded-lg bg-white/5 px-2.5 py-1.5 text-[11px] text-zinc-300">
-                    <span className="flex items-center gap-1.5 truncate">
-                      <span
-                        className={`h-2 w-2 rounded-full ${
-                          buffering
-                            ? 'bg-amber-400 animate-pulse'
-                            : bufferAheadSec >= 8
-                            ? 'bg-emerald-400'
-                            : 'bg-violet-400'
-                        }`}
-                      />
-                      {networkLabel}
-                    </span>
-                    <span className="font-mono text-[10px] text-zinc-400">
-                      {bufferAheadSec > 0 ? `${bufferAheadSec}s buffer` : loading ? 'Loading...' : 'Live'}
-                    </span>
-                  </div>
-
-                  {/* Auto (Stability First) Mode */}
-                  <button
-                    onClick={handleEnableAutoStability}
-                    className={`mb-1 flex w-full items-center justify-between gap-2 rounded-xl px-3 py-2.5 text-left transition ${
-                      autoStability
-                        ? 'bg-violet-600 text-white'
-                        : 'text-zinc-200 hover:bg-white/10'
-                    }`}
-                  >
-                    <div className="min-w-0">
-                      <div className="text-xs font-bold">Auto (Stability First)</div>
-                      <div className="text-[11px] opacity-85">
-                        Auto-lowers quality until buffering stops ({activeQualityLabel})
+                  {settingsPanel === 'root' && (
+                    <>
+                      <div className="flex items-center justify-between px-3 py-1.5">
+                        <span className="text-[11px] font-bold uppercase tracking-wider text-zinc-300">
+                          Playback Settings
+                        </span>
+                        {isTv ? (
+                          <span className="text-[10px] font-medium text-zinc-400">↩ Back to close</span>
+                        ) : (
+                          <button
+                            onClick={() => setShowQualityMenu(false)}
+                            className="rounded-lg p-1 text-zinc-400 hover:bg-white/10 hover:text-white sm:hidden"
+                          >
+                            <X className="h-4 w-4" />
+                          </button>
+                        )}
                       </div>
-                    </div>
-                    {autoStability && <Check className="h-4 w-4 flex-shrink-0" />}
-                  </button>
 
-                  <div className="my-1 border-t border-white/10" />
+                      <div className="space-y-0.5">
+                        <button
+                          onClick={() => setSettingsPanel('aspect')}
+                          className="flex w-full items-center justify-between rounded-xl px-3 py-2.5 text-xs text-white transition hover:bg-white/10"
+                        >
+                          <span className="font-semibold">Aspect Ratio</span>
+                          <span className="flex items-center gap-1 text-zinc-400">
+                            {activeAspectLabel}
+                            <ChevronRight className="h-3.5 w-3.5" />
+                          </span>
+                        </button>
 
-                  {QUALITY_OPTIONS.map((opt) => {
-                    const isSelectedManual = !autoStability && quality === opt.id;
-                    const isActiveAuto = autoStability && quality === opt.id;
-                    return (
+                        <button
+                          onClick={() => setSettingsPanel('speed')}
+                          className="flex w-full items-center justify-between rounded-xl px-3 py-2.5 text-xs text-white transition hover:bg-white/10"
+                        >
+                          <span className="font-semibold">Playback Speed</span>
+                          <span className="flex items-center gap-1 text-zinc-400">
+                            {playbackSpeed}x
+                            <ChevronRight className="h-3.5 w-3.5" />
+                          </span>
+                        </button>
+
+                        <button
+                          onClick={() => setSettingsPanel('quality')}
+                          className="flex w-full items-center justify-between rounded-xl px-3 py-2.5 text-xs text-white transition hover:bg-white/10"
+                        >
+                          <span className="font-semibold">Quality</span>
+                          <span className="flex items-center gap-1 text-zinc-400">
+                            {autoStability ? `Auto · ${activeQualityLabel.replace(' HD', '').replace(' SD', '')}` : activeQualityLabel}
+                            <ChevronRight className="h-3.5 w-3.5" />
+                          </span>
+                        </button>
+
+                        <button
+                          onClick={() => setSettingsPanel('repeat')}
+                          className="flex w-full items-center justify-between rounded-xl px-3 py-2.5 text-xs text-white transition hover:bg-white/10"
+                        >
+                          <span className="font-semibold">Repeat Mode</span>
+                          <span className="flex items-center gap-1 text-zinc-400">
+                            {repeatMode === 'one' ? 'Repeat One' : 'None'}
+                            <ChevronRight className="h-3.5 w-3.5" />
+                          </span>
+                        </button>
+
+                        <div className="my-1 border-t border-white/10" />
+
+                        <button
+                          onClick={() => {
+                            setShowPlaybackInfo(!showPlaybackInfo);
+                            setShowQualityMenu(false);
+                          }}
+                          className="flex w-full items-center justify-between rounded-xl px-3 py-2.5 text-xs text-white transition hover:bg-white/10"
+                        >
+                          <span className="flex items-center gap-2 font-semibold">
+                            <Info className="h-3.5 w-3.5 text-violet-300" />
+                            Playback Info
+                          </span>
+                          <span className={showPlaybackInfo ? 'font-bold text-violet-300' : 'text-zinc-400'}>
+                            {showPlaybackInfo ? 'On' : 'Off'}
+                          </span>
+                        </button>
+                      </div>
+                    </>
+                  )}
+
+                  {settingsPanel === 'aspect' && (
+                    <>
                       <button
-                        key={opt.id}
-                        onClick={() => handleQualityChange(opt.id)}
-                        className={`flex w-full items-center justify-between gap-2 rounded-xl px-3 py-2 text-left transition ${
-                          isSelectedManual
+                        onClick={() => setSettingsPanel('root')}
+                        className="mb-1 flex w-full items-center gap-1.5 rounded-lg px-2 py-1.5 text-[11px] font-bold uppercase tracking-wider text-zinc-300 hover:bg-white/10"
+                      >
+                        <ChevronLeft className="h-3.5 w-3.5" />
+                        Aspect Ratio
+                      </button>
+                      {ASPECT_RATIO_OPTIONS.map((opt) => {
+                        const selected = aspectRatio === opt.id;
+                        return (
+                          <button
+                            key={opt.id}
+                            onClick={() => {
+                              setAspectRatio(opt.id);
+                              setShowQualityMenu(false);
+                            }}
+                            className={`flex w-full items-center justify-between gap-2 rounded-xl px-3 py-2 text-left transition ${
+                              selected ? 'bg-violet-600 text-white' : 'text-zinc-200 hover:bg-white/10'
+                            }`}
+                          >
+                            <div className="min-w-0">
+                              <div className="text-xs font-bold">{opt.label}</div>
+                              <div className="text-[11px] opacity-80">{opt.description}</div>
+                            </div>
+                            {selected && <Check className="h-4 w-4 flex-shrink-0" />}
+                          </button>
+                        );
+                      })}
+                    </>
+                  )}
+
+                  {settingsPanel === 'speed' && (
+                    <>
+                      <button
+                        onClick={() => setSettingsPanel('root')}
+                        className="mb-1 flex w-full items-center gap-1.5 rounded-lg px-2 py-1.5 text-[11px] font-bold uppercase tracking-wider text-zinc-300 hover:bg-white/10"
+                      >
+                        <ChevronLeft className="h-3.5 w-3.5" />
+                        Playback Speed
+                      </button>
+                      {PLAYBACK_SPEEDS.map((spd) => {
+                        const selected = playbackSpeed === spd;
+                        return (
+                          <button
+                            key={spd}
+                            onClick={() => {
+                              setPlaybackSpeed(spd);
+                              setShowQualityMenu(false);
+                            }}
+                            className={`flex w-full items-center justify-between rounded-xl px-3 py-2 text-xs font-semibold transition ${
+                              selected ? 'bg-violet-600 text-white' : 'text-zinc-200 hover:bg-white/10'
+                            }`}
+                          >
+                            <span>{spd === 1 ? '1x (Normal)' : `${spd}x`}</span>
+                            {selected && <Check className="h-4 w-4 flex-shrink-0" />}
+                          </button>
+                        );
+                      })}
+                    </>
+                  )}
+
+                  {settingsPanel === 'repeat' && (
+                    <>
+                      <button
+                        onClick={() => setSettingsPanel('root')}
+                        className="mb-1 flex w-full items-center gap-1.5 rounded-lg px-2 py-1.5 text-[11px] font-bold uppercase tracking-wider text-zinc-300 hover:bg-white/10"
+                      >
+                        <ChevronLeft className="h-3.5 w-3.5" />
+                        Repeat Mode
+                      </button>
+                      {(
+                        [
+                          { id: 'none', label: 'None', desc: 'Stop or play next episode at end' },
+                          { id: 'one', label: 'Repeat One', desc: 'Loop this video continuously' },
+                        ] as const
+                      ).map((opt) => {
+                        const selected = repeatMode === opt.id;
+                        return (
+                          <button
+                            key={opt.id}
+                            onClick={() => {
+                              setRepeatMode(opt.id);
+                              setShowQualityMenu(false);
+                            }}
+                            className={`flex w-full items-center justify-between gap-2 rounded-xl px-3 py-2 text-left transition ${
+                              selected ? 'bg-violet-600 text-white' : 'text-zinc-200 hover:bg-white/10'
+                            }`}
+                          >
+                            <div className="min-w-0">
+                              <div className="text-xs font-bold">{opt.label}</div>
+                              <div className="text-[11px] opacity-80">{opt.desc}</div>
+                            </div>
+                            {selected && <Check className="h-4 w-4 flex-shrink-0" />}
+                          </button>
+                        );
+                      })}
+                    </>
+                  )}
+
+                  {settingsPanel === 'quality' && (
+                    <>
+                      <button
+                        onClick={() => setSettingsPanel('root')}
+                        className="mb-1 flex w-full items-center gap-1.5 rounded-lg px-2 py-1.5 text-[11px] font-bold uppercase tracking-wider text-zinc-300 hover:bg-white/10"
+                      >
+                        <ChevronLeft className="h-3.5 w-3.5" />
+                        Stream Quality
+                      </button>
+
+                      {/* Live Network & Buffer Health Strip */}
+                      <div className="mx-1 mb-1.5 flex items-center justify-between rounded-lg bg-white/5 px-2.5 py-1.5 text-[11px] text-zinc-300">
+                        <span className="flex items-center gap-1.5 truncate">
+                          <span
+                            className={`h-2 w-2 rounded-full ${
+                              buffering
+                                ? 'bg-amber-400 animate-pulse'
+                                : bufferAheadSec >= 8
+                                ? 'bg-emerald-400'
+                                : 'bg-violet-400'
+                            }`}
+                          />
+                          {networkLabel}
+                        </span>
+                        <span className="font-mono text-[10px] text-zinc-400">
+                          {bufferAheadSec > 0 ? `${bufferAheadSec}s buffer` : loading ? 'Loading...' : 'Live'}
+                        </span>
+                      </div>
+
+                      {/* Auto (Stability First) Mode */}
+                      <button
+                        onClick={handleEnableAutoStability}
+                        className={`mb-1 flex w-full items-center justify-between gap-2 rounded-xl px-3 py-2.5 text-left transition ${
+                          autoStability
                             ? 'bg-violet-600 text-white'
-                            : isActiveAuto
-                            ? 'bg-white/10 text-white'
                             : 'text-zinc-200 hover:bg-white/10'
                         }`}
                       >
                         <div className="min-w-0">
-                          <div className="text-xs font-bold">{opt.label}</div>
-                          <div className="text-[11px] opacity-80">{opt.description}</div>
+                          <div className="text-xs font-bold">Auto (Stability First)</div>
+                          <div className="text-[11px] opacity-85">
+                            Auto-lowers quality until buffering stops ({activeQualityLabel})
+                          </div>
                         </div>
-                        {isSelectedManual && <Check className="h-4 w-4 flex-shrink-0" />}
+                        {autoStability && <Check className="h-4 w-4 flex-shrink-0" />}
                       </button>
-                    );
-                  })}
+
+                      <div className="my-1 border-t border-white/10" />
+
+                      {QUALITY_OPTIONS.map((opt) => {
+                        const isSelectedManual = !autoStability && quality === opt.id;
+                        const isActiveAuto = autoStability && quality === opt.id;
+                        return (
+                          <button
+                            key={opt.id}
+                            onClick={() => handleQualityChange(opt.id)}
+                            className={`flex w-full items-center justify-between gap-2 rounded-xl px-3 py-2 text-left transition ${
+                              isSelectedManual
+                                ? 'bg-violet-600 text-white'
+                                : isActiveAuto
+                                ? 'bg-white/10 text-white'
+                                : 'text-zinc-200 hover:bg-white/10'
+                            }`}
+                          >
+                            <div className="min-w-0">
+                              <div className="text-xs font-bold">{opt.label}</div>
+                              <div className="text-[11px] opacity-80">{opt.description}</div>
+                            </div>
+                            {isSelectedManual && <Check className="h-4 w-4 flex-shrink-0" />}
+                          </button>
+                        );
+                      })}
+                    </>
+                  )}
                 </div>
               )}
             </div>

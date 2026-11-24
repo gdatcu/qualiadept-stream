@@ -25,13 +25,14 @@ import {
   removeSavedProfile,
   saveCachedLibrary,
   toggleFavorite,
+  togglePlayedStatus,
 } from './services/jellyfin';
 import {
   listActiveDownloads,
   listOfflineRecords,
   subscribeOfflineDownloads,
 } from './services/offlineDownloads';
-import type { AuthSession, MediaItem } from './types/media';
+import type { AuthSession, MediaItem, PlaybackStartOptions } from './types/media';
 import { exitTizenApp, initTvNavigation, isTizenTv } from './utils/tvNavigation';
 
 const DownloadsView = lazy(() =>
@@ -79,6 +80,9 @@ export const App: React.FC = () => {
   const [sortBy, setSortBy] = useState<SortOption>('recent');
   const [selectedItem, setSelectedItem] = useState<MediaItem | null>(null);
   const [playingItem, setPlayingItem] = useState<MediaItem | null>(null);
+  const [playStartOptions, setPlayStartOptions] = useState<PlaybackStartOptions | undefined>(
+    undefined
+  );
   const [showExitToast, setShowExitToast] = useState(false);
   const [availableUpdate, setAvailableUpdate] = useState<AppUpdateInfo | null>(null);
   const [statusToast, setStatusToast] = useState<string | null>(null);
@@ -174,6 +178,7 @@ export const App: React.FC = () => {
 
   const closePlayer = useCallback(() => {
     setPlayingItem(null);
+    setPlayStartOptions(undefined);
     const activeSession = sessionRef.current;
     if (activeSession && !activeSession.isDemo && navigator.onLine !== false) {
       fetchResumeItems(activeSession)
@@ -429,11 +434,39 @@ export const App: React.FC = () => {
       setItems((prev) =>
         prev.map((i) => (i.id === item.id ? { ...i, isFavorite: next } : i))
       );
+      setResumeItems((prev) =>
+        prev.map((i) => (i.id === item.id ? { ...i, isFavorite: next } : i))
+      );
       setSelectedItem((prev) =>
+        prev && prev.id === item.id ? { ...prev, isFavorite: next } : prev
+      );
+      setPlayingItem((prev) =>
         prev && prev.id === item.id ? { ...prev, isFavorite: next } : prev
       );
     } catch {
       // Ignore transient error
+    }
+  };
+
+  const handleTogglePlayed = async (item: MediaItem) => {
+    if (!session) return;
+    try {
+      const next = await togglePlayedStatus(session, item.id, !!item.isPlayed);
+      const patch = (i: MediaItem): MediaItem =>
+        i.id === item.id
+          ? {
+              ...i,
+              isPlayed: next,
+              playedPercentage: next ? 100 : 0,
+              resumePositionSeconds: next ? undefined : i.resumePositionSeconds,
+            }
+          : i;
+      setItems((prev) => prev.map(patch));
+      setResumeItems((prev) => (next ? prev.filter((i) => i.id !== item.id) : prev.map(patch)));
+      setSelectedItem((prev) => (prev && prev.id === item.id ? patch(prev) : prev));
+      flashStatusToast(next ? 'Marked as played' : 'Marked as unplayed');
+    } catch {
+      flashStatusToast('Could not update watched status');
     }
   };
 
@@ -764,11 +797,14 @@ export const App: React.FC = () => {
           session={session}
           item={selectedItem}
           onClose={() => setSelectedItem(null)}
-          onPlay={(item) => {
+          onSelectItem={(next) => setSelectedItem(next)}
+          onPlay={(item, options) => {
             setSelectedItem(null);
+            setPlayStartOptions(options);
             setPlayingItem(item);
           }}
           onToggleFavorite={handleToggleFavorite}
+          onTogglePlayed={handleTogglePlayed}
         />
       )}
 
@@ -778,8 +814,16 @@ export const App: React.FC = () => {
           <VideoPlayer
             session={session}
             item={playingItem}
-            onPlayNext={(nextEp) => setPlayingItem(nextEp)}
-            onClose={closePlayer}
+            startOptions={playStartOptions}
+            onPlayNext={(nextEp) => {
+              setPlayStartOptions(undefined);
+              setPlayingItem(nextEp);
+            }}
+            onToggleFavorite={handleToggleFavorite}
+            onClose={() => {
+              setPlayStartOptions(undefined);
+              closePlayer();
+            }}
           />
         </Suspense>
       )}

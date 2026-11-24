@@ -4,12 +4,16 @@ import {
   type ActiveStreamSession,
   type AudioTrack,
   type AuthSession,
+  type ChapterItem,
   type FamilyUser,
   type MediaItem,
+  type MediaItemDetails,
   type ParentalTier,
+  type PersonCredit,
   type PlaybackInfo,
   type PublicUserProfile,
   type QualityPreset,
+  type RemoteTrailer,
   type SeasonItem,
   type SubtitleTrack,
 } from '../types/media';
@@ -405,6 +409,7 @@ interface RawJellyfinItem {
   ParentBackdropItemId?: string;
   UserData?: {
     IsFavorite?: boolean;
+    Played?: boolean;
     PlayedPercentage?: number;
     PlaybackPositionTicks?: number;
   };
@@ -455,6 +460,7 @@ function mapJellyfinItem(raw: RawJellyfinItem, session: AuthSession): MediaItem 
     posterUrl,
     backdropUrl,
     isFavorite: raw.UserData?.IsFavorite ?? false,
+    isPlayed: Boolean(raw.UserData?.Played),
     playedPercentage: raw.UserData?.PlayedPercentage,
     resumePositionSeconds,
     seriesId: raw.SeriesId,
@@ -602,6 +608,227 @@ export async function toggleFavorite(
   return !currentlyFavorite;
 }
 
+export async function togglePlayedStatus(
+  session: AuthSession,
+  itemId: string,
+  currentlyPlayed: boolean
+): Promise<boolean> {
+  if (session.isDemo) return !currentlyPlayed;
+
+  const method = currentlyPlayed ? 'DELETE' : 'POST';
+  const res = await fetch(
+    `${session.serverUrl}/Users/${session.userId}/PlayedItems/${itemId}`,
+    {
+      method,
+      headers: { Authorization: buildAuthHeader(session.accessToken) },
+    }
+  );
+
+  if (!res.ok) throw new Error('Failed to update watched status');
+  itemDetailsCache.delete(`${session.userId}:${itemId}`);
+  return !currentlyPlayed;
+}
+
+interface ItemDetailsCacheEntry {
+  details: MediaItemDetails;
+  ts: number;
+}
+
+const ITEM_DETAILS_TTL_MS = 120_000;
+const itemDetailsCache = new Map<string, ItemDetailsCacheEntry>();
+
+export async function fetchItemDetails(
+  session: AuthSession,
+  itemId: string
+): Promise<MediaItemDetails | null> {
+  if (session.isDemo) return null;
+  const cacheKey = `${session.userId}:${itemId}`;
+  const cached = itemDetailsCache.get(cacheKey);
+  if (cached && Date.now() - cached.ts < ITEM_DETAILS_TTL_MS) {
+    return cached.details;
+  }
+
+  try {
+    const res = await fetchWithRetry(
+      `${session.serverUrl}/Users/${session.userId}/Items/${itemId}`,
+      {
+        headers: { Authorization: buildAuthHeader(session.accessToken) },
+      },
+      { timeoutMs: 10_000, retries: 1 }
+    );
+    if (!res.ok) return null;
+    const raw = (await res.json()) as {
+      Taglines?: string[];
+      Tags?: string[];
+      ProviderIds?: { Imdb?: string; Tmdb?: string };
+      Studios?: Array<{ Name?: string }>;
+      RemoteTrailers?: Array<{ Name?: string; Url?: string }>;
+      Chapters?: Array<{ Name?: string; StartPositionTicks?: number }>;
+      UserData?: { Played?: boolean };
+      People?: Array<{
+        Id?: string;
+        Name?: string;
+        Role?: string;
+        Type?: string;
+        PrimaryImageTag?: string;
+      }>;
+      MediaSources?: Array<{
+        Id?: string;
+        MediaStreams?: RawMediaStream[];
+      }>;
+    };
+
+    const token = encodeURIComponent(session.accessToken);
+    const base = session.serverUrl;
+
+    const rawPeople = Array.isArray(raw.People) ? raw.People : [];
+    const people: PersonCredit[] = rawPeople
+      .filter((p) => Boolean(p.Id && p.Name))
+      .map((p) => ({
+        id: p.Id!,
+        name: p.Name!,
+        role: p.Role || (p.Type && p.Type !== 'Actor' ? p.Type : undefined),
+        type: p.Type || 'Actor',
+        avatarUrl: p.PrimaryImageTag
+          ? `${base}/Items/${p.Id}/Images/Primary?tag=${encodeURIComponent(p.PrimaryImageTag)}&fillWidth=300&fillHeight=450&quality=85&api_key=${token}`
+          : undefined,
+      }));
+
+    const directors = rawPeople
+      .filter((p) => p.Type === 'Director' && p.Name)
+      .map((p) => p.Name!);
+    const writers = rawPeople
+      .filter((p) => p.Type === 'Writer' && p.Name)
+      .map((p) => p.Name!);
+    const studios = (raw.Studios || [])
+      .map((s) => s.Name)
+      .filter((n): n is string => Boolean(n));
+
+    const remoteTrailers: RemoteTrailer[] = (raw.RemoteTrailers || [])
+      .filter((t) => Boolean(t.Url))
+      .map((t, idx) => ({
+        name: t.Name || (idx === 0 ? 'Official Trailer' : `Trailer ${idx + 1}`),
+        url: t.Url!,
+      }));
+
+    const chapters: ChapterItem[] = (raw.Chapters || [])
+      .filter((c) => typeof c.StartPositionTicks === 'number')
+      .map((c, idx) => ({
+        name: c.Name?.trim() || `Chapter ${idx + 1}`,
+        startSeconds: Math.max(0, Math.floor((c.StartPositionTicks || 0) / 10_000_000)),
+      }))
+      .sort((a, b) => a.startSeconds - b.startSeconds);
+
+    const primarySource = raw.MediaSources?.[0];
+    const streams: RawMediaStream[] = primarySource?.MediaStreams || [];
+    const videoStream = streams.find((s) => s.Type === 'Video');
+    const audioTracks: AudioTrack[] = streams
+      .filter((s) => s.Type === 'Audio')
+      .map((s) => ({
+        index: s.Index,
+        label: formatAudioLabel(s),
+        language: s.Language || 'und',
+        codec: s.Codec,
+        channels: s.Channels,
+        isDefault: Boolean(s.IsDefault),
+      }));
+    const defaultAudio = audioTracks.find((a) => a.isDefault) || audioTracks[0] || null;
+
+    const subtitleTracks: SubtitleTrack[] = streams
+      .filter((s) => s.Type === 'Subtitle')
+      .map((s) => ({
+        index: s.Index,
+        label: formatSubtitleLabel(s),
+        language: s.Language || 'und',
+        isText: Boolean(s.IsTextSubtitleStream),
+        codec: s.Codec,
+        isDefault: Boolean(s.IsDefault),
+        isForced: Boolean(s.IsForced),
+      }));
+    const defaultSub = subtitleTracks.find((s) => s.isDefault) || null;
+
+    const details: MediaItemDetails = {
+      tagline: raw.Taglines?.[0],
+      tags: Array.isArray(raw.Tags) ? raw.Tags : [],
+      people,
+      directors,
+      writers,
+      studios,
+      imdbId: raw.ProviderIds?.Imdb,
+      tmdbId: raw.ProviderIds?.Tmdb,
+      remoteTrailers,
+      chapters,
+      isPlayed: Boolean(raw.UserData?.Played),
+      videoSpec: formatVideoSpec(videoStream),
+      audioTracks,
+      subtitleTracks,
+      defaultAudioIndex: defaultAudio ? defaultAudio.index : null,
+      defaultSubtitleIndex: defaultSub ? defaultSub.index : null,
+    };
+
+    itemDetailsCache.set(cacheKey, { details, ts: Date.now() });
+    return details;
+  } catch {
+    return null;
+  }
+}
+
+export async function fetchSimilarItems(
+  session: AuthSession,
+  itemId: string
+): Promise<MediaItem[]> {
+  if (session.isDemo) {
+    return DEMO_ITEMS.filter((i) => i.id !== itemId).slice(0, 8);
+  }
+  try {
+    const params = new URLSearchParams({
+      userId: session.userId,
+      Limit: '12',
+      Fields: 'Overview,Genres,RunTimeTicks,OfficialRating,CommunityRating,UserData',
+    });
+    const res = await fetch(
+      `${session.serverUrl}/Items/${itemId}/Similar?${params.toString()}`,
+      {
+        headers: { Authorization: buildAuthHeader(session.accessToken) },
+      }
+    );
+    if (!res.ok) return [];
+    const data = await res.json();
+    return (data.Items as RawJellyfinItem[]).map((raw) => mapJellyfinItem(raw, session));
+  } catch {
+    return [];
+  }
+}
+
+export async function fetchPersonItems(
+  session: AuthSession,
+  personId: string
+): Promise<MediaItem[]> {
+  if (session.isDemo) return [];
+  try {
+    const params = new URLSearchParams({
+      PersonIds: personId,
+      Recursive: 'true',
+      IncludeItemTypes: 'Movie,Series',
+      SortBy: 'ProductionYear,SortName',
+      SortOrder: 'Descending',
+      Fields: 'Overview,Genres,RunTimeTicks,OfficialRating,CommunityRating,UserData',
+      Limit: '24',
+    });
+    const res = await fetch(
+      `${session.serverUrl}/Users/${session.userId}/Items?${params.toString()}`,
+      {
+        headers: { Authorization: buildAuthHeader(session.accessToken) },
+      }
+    );
+    if (!res.ok) return [];
+    const data = await res.json();
+    return (data.Items as RawJellyfinItem[]).map((raw) => mapJellyfinItem(raw, session));
+  } catch {
+    return [];
+  }
+}
+
 export async function fetchNextEpisode(
   session: AuthSession,
   currentItem: MediaItem
@@ -681,10 +908,29 @@ interface RawMediaStream {
   Width?: number;
   Height?: number;
   BitRate?: number;
+  VideoRange?: string;
+  VideoRangeType?: string;
   IsDefault?: boolean;
   IsForced?: boolean;
   IsTextSubtitleStream?: boolean;
   DeliveryUrl?: string;
+}
+
+function formatVideoSpec(s?: RawMediaStream): string | undefined {
+  if (!s) return undefined;
+  if (s.DisplayTitle) return s.DisplayTitle;
+  const parts: string[] = [];
+  if (s.Width && s.Width >= 3800) parts.push('4K');
+  else if (s.Height) {
+    if (s.Height >= 1000) parts.push('1080p');
+    else if (s.Height >= 700) parts.push('720p');
+    else if (s.Height >= 460) parts.push('480p');
+    else parts.push(`${s.Height}p`);
+  }
+  if (s.Codec) parts.push(s.Codec.toUpperCase());
+  const range = s.VideoRangeType || s.VideoRange;
+  if (range) parts.push(range);
+  return parts.length > 0 ? parts.join(' ') : undefined;
 }
 
 function formatAudioLabel(s: RawMediaStream): string {
@@ -878,9 +1124,20 @@ async function fetchPlaybackInfoUncached(
   // Allow Direct Play whenever the native MP4/WebM source already fits within the selected quality cap
   // (avoids unnecessary ARM64 CPU transcoding on 5G for SD/720p videos while still capping high-bitrate 1080p/4K).
   const videoStream = streams.find((s) => s.Type === 'Video');
+  const activeAudioStream =
+    streams.find((s) => s.Type === 'Audio' && s.Index === effectiveAudioIndex) ||
+    streams.find((s) => s.Type === 'Audio');
   const sourceBitrate: number | undefined =
     typeof source.Bitrate === 'number' ? source.Bitrate : videoStream?.BitRate;
   const sourceWidth: number | undefined = videoStream?.Width;
+  const sourceHeight: number | undefined = videoStream?.Height;
+  const videoCodec: string | undefined = videoStream?.Codec?.toUpperCase();
+  const videoRange: string | undefined = videoStream?.VideoRangeType || videoStream?.VideoRange;
+  const audioCodec: string | undefined = activeAudioStream?.Codec?.toUpperCase();
+  const audioChannels: number | undefined = activeAudioStream?.Channels;
+  const container: string | undefined = source.Container
+    ? String(source.Container).toUpperCase()
+    : undefined;
   const fitsSelectedQuality =
     quality === 'auto' ||
     ((!sourceBitrate || sourceBitrate <= maxBitrate) &&
@@ -906,6 +1163,12 @@ async function fetchPlaybackInfoUncached(
       subtitles,
       sourceBitrate,
       sourceWidth,
+      sourceHeight,
+      videoCodec,
+      videoRange,
+      audioCodec,
+      audioChannels,
+      container,
     };
   }
 
@@ -966,6 +1229,12 @@ async function fetchPlaybackInfoUncached(
     subtitles,
     sourceBitrate,
     sourceWidth,
+    sourceHeight,
+    videoCodec,
+    videoRange,
+    audioCodec,
+    audioChannels,
+    container,
   };
 }
 

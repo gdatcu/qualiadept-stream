@@ -39,6 +39,50 @@ export interface SubtitleTrack {
   url?: string;
 }
 
+export interface PersonCredit {
+  id: string;
+  name: string;
+  role?: string;
+  type: string;
+  avatarUrl?: string;
+}
+
+export interface ChapterItem {
+  name: string;
+  startSeconds: number;
+}
+
+export interface RemoteTrailer {
+  name: string;
+  url: string;
+}
+
+export interface MediaItemDetails {
+  tagline?: string;
+  tags: string[];
+  people: PersonCredit[];
+  directors: string[];
+  writers: string[];
+  studios: string[];
+  imdbId?: string;
+  tmdbId?: string;
+  remoteTrailers: RemoteTrailer[];
+  chapters: ChapterItem[];
+  isPlayed: boolean;
+  videoSpec?: string;
+  audioTracks: AudioTrack[];
+  subtitleTracks: SubtitleTrack[];
+  defaultAudioIndex: number | null;
+  defaultSubtitleIndex: number | null;
+}
+
+export interface PlaybackStartOptions {
+  startFromBeginning?: boolean;
+  audioIndex?: number | null;
+  /** null = explicitly Off, number = specific subtitle stream index, undefined = player default */
+  subtitleIndex?: number | null;
+}
+
 export interface MediaItem {
   id: string;
   name: string;
@@ -53,6 +97,7 @@ export interface MediaItem {
   posterUrl: string;
   backdropUrl: string;
   isFavorite?: boolean;
+  isPlayed?: boolean;
   /** 0 to 100 percentage for Continue Watching */
   playedPercentage?: number;
   /** Position in seconds to resume from */
@@ -83,6 +128,12 @@ export interface PlaybackInfo {
   subtitles: SubtitleTrack[];
   sourceBitrate?: number;
   sourceWidth?: number;
+  sourceHeight?: number;
+  videoCodec?: string;
+  videoRange?: string;
+  audioCodec?: string;
+  audioChannels?: number;
+  container?: string;
 }
 
 export interface AuthSession {
