@@ -143,7 +143,7 @@ export const Navbar: React.FC<NavbarProps> = ({
                 type="text"
                 value={searchQuery}
                 onChange={(e) => onSearchChange(e.target.value)}
-                placeholder="Search titles, genres..."
+                placeholder="Search titles, actors, year..."
                 className="w-36 sm:w-56 bg-transparent px-2.5 text-sm text-white placeholder-zinc-500 outline-none"
               />
               <button

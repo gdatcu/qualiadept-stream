@@ -9,6 +9,7 @@ import {
   HardDrive,
   Heart,
   Info,
+  ListVideo,
   Maximize,
   Minimize,
   Pause,
@@ -72,7 +73,12 @@ import {
 import {
   fetchSubtitleCues,
   getActiveSubtitleLines,
+  loadSubtitlePreferences,
+  saveSubtitlePreferences,
   type SubtitleCue,
+  type SubtitlePreferences,
+  type SubtitleSize,
+  type SubtitleStyle,
 } from '../utils/subtitles';
 import { isTizenTv } from '../utils/tvNavigation';
 
@@ -156,7 +162,11 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
   const subBtnRef = useRef<HTMLButtonElement>(null);
   const isTv = isTizenTv();
   const resumeOverrideRef = useRef<number | null>(
-    startOptions?.startFromBeginning ? 0 : null
+    typeof startOptions?.startAtSeconds === 'number'
+      ? startOptions.startAtSeconds
+      : startOptions?.startFromBeginning
+      ? 0
+      : null
   );
   const appliedStartSubItemIdRef = useRef<string | null>(null);
   const swipeStartRef = useRef<{ y: number; startBrightness: number; moved: boolean } | null>(null);
@@ -215,6 +225,26 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
   const [loadingSubtitles, setLoadingSubtitles] = useState(false);
   const [showSubMenu, setShowSubMenu] = useState(false);
   const [showQualityMenu, setShowQualityMenu] = useState(false);
+  const [showChaptersMenu, setShowChaptersMenu] = useState(false);
+
+  // Subtitle appearance, sync offset, and remembered preferred language
+  const [subtitlePrefs, setSubtitlePrefs] = useState<SubtitlePreferences>(() =>
+    loadSubtitlePreferences()
+  );
+  const [subtitleOffsetSec, setSubtitleOffsetSec] = useState(0);
+
+  const updateSubtitlePrefs = useCallback(
+    (patch: Partial<SubtitlePreferences>) => {
+      setSubtitlePrefs((prev) => {
+        const next: SubtitlePreferences = { ...prev, ...patch };
+        if (!session.isHidden) {
+          saveSubtitlePreferences(next);
+        }
+        return next;
+      });
+    },
+    [session.isHidden]
+  );
 
   // Pro Cinema Player settings (Aspect Ratio, Speed, Repeat, Chapters, Playback Info)
   const [settingsPanel, setSettingsPanel] = useState<SettingsSubPanel>('root');
@@ -454,8 +484,15 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
     setForceHls(false);
     setUseNativeHls(false);
     setChapters([]);
+    setShowChaptersMenu(false);
+    setSubtitleOffsetSec(0);
     setStreamStatus('Preparing stream...');
-    resumeOverrideRef.current = startOptions?.startFromBeginning ? 0 : null;
+    resumeOverrideRef.current =
+      typeof startOptions?.startAtSeconds === 'number'
+        ? startOptions.startAtSeconds
+        : startOptions?.startFromBeginning
+        ? 0
+        : null;
     appliedStartSubItemIdRef.current = null;
     stallTimestampsRef.current = [];
     hasStartedPlayingRef.current = false;
@@ -481,14 +518,26 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
     };
   }, [session, item, startOptions]);
 
-  // Apply pre-selected subtitle from DetailModal once playback tracks arrive
+  // Apply pre-selected subtitle from DetailModal OR remembered preferred language once tracks arrive
   useEffect(() => {
     if (!playback) return;
     if (appliedStartSubItemIdRef.current === item.id) return;
     appliedStartSubItemIdRef.current = item.id;
     const desired = startOptions?.subtitleIndex;
-    if (desired === undefined || desired === null) return;
-    const match = playback.subtitles.find((s) => s.index === desired);
+    if (desired === null) return; // explicitly Off from DetailModal
+
+    let match: SubtitleTrack | undefined;
+    if (typeof desired === 'number') {
+      match = playback.subtitles.find((s) => s.index === desired);
+    } else if (subtitlePrefs.preferredLanguage) {
+      const pref = subtitlePrefs.preferredLanguage.toLowerCase();
+      // Prefer text subtitle matching saved language so playback doesn't need HLS burn-in restart
+      match =
+        playback.subtitles.find(
+          (s) => s.isText && s.language.toLowerCase() === pref && !s.isForced
+        ) || playback.subtitles.find((s) => s.isText && s.language.toLowerCase() === pref);
+    }
+
     if (!match) return;
     if (match.isText) {
       setActiveTextSubIndex(match.index);
@@ -496,7 +545,7 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
       resumeOverrideRef.current = videoRef.current?.currentTime || item.resumePositionSeconds || 0;
       setBurnInSubIndex(match.index);
     }
-  }, [playback, item.id, item.resumePositionSeconds, startOptions]);
+  }, [playback, item.id, item.resumePositionSeconds, startOptions, subtitlePrefs.preferredLanguage]);
 
   // Keep HTML5 video playbackRate synced with selected Playback Speed
   useEffect(() => {
@@ -1709,6 +1758,7 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
   const handleSubtitleSelect = (sub: SubtitleTrack | null) => {
     const isCasting = castStateRef.current.isConnected;
     if (!sub) {
+      updateSubtitlePrefs({ preferredLanguage: null });
       setActiveTextSubIndex(null);
       if (burnInSubIndex !== null) {
         setBurnInSubIndex(null);
@@ -1723,6 +1773,10 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
       setShowSubMenu(false);
       bumpControls();
       return;
+    }
+
+    if (sub.language && sub.language !== 'und') {
+      updateSubtitlePrefs({ preferredLanguage: sub.language.toLowerCase() });
     }
 
     if (sub.isText && sub.url) {
@@ -2069,8 +2123,33 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
 
       {/* Custom WebVTT Subtitle Overlay (works identically on Mobile Chrome, Android APK, Desktop & Samsung TV) */}
       {!castDeviceName && !error && (subtitleCues.length > 0 || loadingSubtitles) && (() => {
-        const activeLines = getActiveSubtitleLines(subtitleCues, displayCurrentTime);
+        const activeLines = getActiveSubtitleLines(
+          subtitleCues,
+          displayCurrentTime,
+          subtitleOffsetSec
+        );
         if (activeLines.length === 0 && !loadingSubtitles) return null;
+        const sizeClass = isTv
+          ? subtitlePrefs.size === 'sm'
+            ? 'text-xl px-4 py-1.5'
+            : subtitlePrefs.size === 'lg'
+            ? 'text-3xl px-6 py-2.5'
+            : subtitlePrefs.size === 'xl'
+            ? 'text-4xl px-7 py-3'
+            : 'text-2xl px-5 py-2'
+          : subtitlePrefs.size === 'sm'
+          ? 'text-xs sm:text-base px-3 py-1'
+          : subtitlePrefs.size === 'lg'
+          ? 'text-base sm:text-2xl px-4 py-2'
+          : subtitlePrefs.size === 'xl'
+          ? 'text-lg sm:text-3xl px-5 py-2.5'
+          : 'text-sm sm:text-xl px-3.5 py-1.5';
+        const styleClass =
+          subtitlePrefs.style === 'outline'
+            ? 'bg-transparent [text-shadow:0_2px_4px_#000,0_0_8px_#000,1px_1px_2px_#000,-1px_-1px_2px_#000]'
+            : subtitlePrefs.style === 'box'
+            ? 'rounded-sm bg-black/95 shadow-xl [text-shadow:0_1px_3px_rgba(0,0,0,0.9)]'
+            : 'rounded-lg bg-black/75 shadow-lg backdrop-blur-[2px] [text-shadow:0_2px_6px_rgba(0,0,0,0.95)]';
         return (
           <div
             className={`pointer-events-none absolute inset-x-4 z-20 flex flex-col items-center gap-1 text-center transition-all duration-200 sm:inset-x-12 ${
@@ -2085,9 +2164,7 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
               activeLines.map((line, idx) => (
                 <span
                   key={idx}
-                  className={`max-w-4xl whitespace-pre-line rounded-lg bg-black/75 px-3.5 py-1.5 font-semibold leading-snug text-white shadow-lg [text-shadow:0_2px_6px_rgba(0,0,0,0.95)] ${
-                    isTv ? 'text-2xl px-5 py-2' : 'text-sm sm:text-xl'
-                  }`}
+                  className={`max-w-4xl whitespace-pre-line font-semibold leading-snug text-white ${sizeClass} ${styleClass}`}
                 >
                   {line}
                 </span>
@@ -2738,6 +2815,103 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
           </div>
 
           <div className="relative flex items-center gap-1.5 sm:gap-2 flex-shrink-0">
+            {/* Visual Chapters Drawer Button */}
+            {chapters.length > 1 && (
+              <div className="relative">
+                <button
+                  onClick={() => {
+                    setShowChaptersMenu(!showChaptersMenu);
+                    setShowQualityMenu(false);
+                    setShowSubMenu(false);
+                    bumpControls();
+                  }}
+                  title="Chapters"
+                  className={`flex items-center gap-1.5 rounded-xl transition hover:bg-white/25 focus:outline-none focus:ring-2 focus:ring-violet-400 ${
+                    isTv
+                      ? 'bg-white/15 px-3.5 py-2 text-xs font-semibold'
+                      : 'p-1.5 sm:p-2 hover:bg-white/10'
+                  } ${showChaptersMenu ? 'text-violet-300 bg-white/15' : 'text-zinc-200'}`}
+                >
+                  <ListVideo className="h-4 w-4 sm:h-5 sm:w-5" />
+                  {isTv && <span>Chapters</span>}
+                </button>
+                {showChaptersMenu && (
+                  <div
+                    data-tv-player-menu="true"
+                    className="fixed inset-x-3 bottom-20 z-40 max-h-[68dvh] overflow-y-auto rounded-2xl border border-white/20 bg-surface/95 p-3 shadow-2xl backdrop-blur-xl sm:absolute sm:inset-x-auto sm:bottom-16 sm:right-0 sm:w-96"
+                  >
+                    <div className="mb-2 flex items-center justify-between px-1">
+                      <span className="text-[11px] font-bold uppercase tracking-wider text-zinc-300">
+                        Chapters ({chapters.length})
+                      </span>
+                      <button
+                        onClick={() => setShowChaptersMenu(false)}
+                        className="rounded-lg p-1 text-zinc-400 hover:bg-white/10 hover:text-white"
+                      >
+                        <X className="h-4 w-4" />
+                      </button>
+                    </div>
+                    <div className="space-y-1.5 max-h-[54vh] overflow-y-auto pr-0.5">
+                      {chapters.map((ch) => {
+                        const isActive =
+                          currentChapter?.startSeconds === ch.startSeconds &&
+                          currentChapter?.name === ch.name;
+                        return (
+                          <button
+                            key={`${ch.index}-${ch.startSeconds}`}
+                            onClick={() => {
+                              if (isCasting) {
+                                seekChromecast(ch.startSeconds);
+                              } else if (videoRef.current) {
+                                videoRef.current.currentTime = ch.startSeconds;
+                                setCurrentTime(ch.startSeconds);
+                              }
+                              setShowChaptersMenu(false);
+                              bumpControls();
+                            }}
+                            className={`flex w-full items-center gap-3 rounded-xl p-1.5 text-left transition ${
+                              isActive
+                                ? 'bg-violet-600/35 ring-1 ring-violet-400 text-white'
+                                : 'text-zinc-200 hover:bg-white/10'
+                            }`}
+                          >
+                            <div className="relative h-12 w-20 flex-shrink-0 overflow-hidden rounded-lg bg-obsidian border border-white/10">
+                              {ch.imageUrl ? (
+                                <img
+                                  src={ch.imageUrl}
+                                  alt={ch.name}
+                                  loading="lazy"
+                                  onError={(e) => {
+                                    e.currentTarget.style.display = 'none';
+                                  }}
+                                  className="h-full w-full object-cover"
+                                />
+                              ) : item.backdropUrl ? (
+                                <img
+                                  src={item.backdropUrl}
+                                  alt={ch.name}
+                                  className="h-full w-full object-cover opacity-50"
+                                />
+                              ) : null}
+                            </div>
+                            <div className="min-w-0 flex-1">
+                              <div className="truncate text-xs font-bold">{ch.name}</div>
+                              <div className="mt-0.5 font-mono text-[11px] text-violet-300">
+                                {formatTime(ch.startSeconds)}
+                              </div>
+                            </div>
+                            {isActive && (
+                              <span className="h-2 w-2 flex-shrink-0 rounded-full bg-fuchsia-400 shadow-[0_0_8px_rgba(232,121,249,0.9)]" />
+                            )}
+                          </button>
+                        );
+                      })}
+                    </div>
+                  </div>
+                )}
+              </div>
+            )}
+
             {/* Favorite Heart Toggle */}
             {onToggleFavorite && (
               <button
@@ -2763,6 +2937,7 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
                 onClick={() => {
                   setShowQualityMenu(!showQualityMenu);
                   setShowSubMenu(false);
+                  setShowChaptersMenu(false);
                   bumpControls();
                 }}
                 title="Playback Settings"
@@ -3177,6 +3352,103 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
                             );
                           })}
                         </div>
+                      </div>
+                    )}
+
+                    {/* Subtitle Appearance & Timing Sync Strip (Size · Style · Offset) */}
+                    {playback.subtitles.length > 0 && (
+                      <div className="col-span-full mt-1 border-t border-white/10 pt-2.5 flex flex-wrap items-center justify-between gap-2 text-[11px]">
+                        <div className="flex items-center gap-1">
+                          <span className="mr-1 font-bold uppercase tracking-wider text-zinc-400">
+                            Size
+                          </span>
+                          {(
+                            [
+                              { id: 'sm', label: 'S' },
+                              { id: 'md', label: 'M' },
+                              { id: 'lg', label: 'L' },
+                              { id: 'xl', label: 'XL' },
+                            ] as Array<{ id: SubtitleSize; label: string }>
+                          ).map((sz) => (
+                            <button
+                              key={sz.id}
+                              onClick={() => updateSubtitlePrefs({ size: sz.id })}
+                              className={`rounded-md px-2 py-1 font-bold transition ${
+                                subtitlePrefs.size === sz.id
+                                  ? 'bg-violet-600 text-white'
+                                  : 'bg-white/5 text-zinc-300 hover:bg-white/15'
+                              }`}
+                            >
+                              {sz.label}
+                            </button>
+                          ))}
+                        </div>
+
+                        <div className="flex items-center gap-1">
+                          <span className="mr-1 font-bold uppercase tracking-wider text-zinc-400">
+                            Style
+                          </span>
+                          {(
+                            [
+                              { id: 'pill', label: 'Pill' },
+                              { id: 'outline', label: 'Shadow' },
+                              { id: 'box', label: 'Box' },
+                            ] as Array<{ id: SubtitleStyle; label: string }>
+                          ).map((st) => (
+                            <button
+                              key={st.id}
+                              onClick={() => updateSubtitlePrefs({ style: st.id })}
+                              className={`rounded-md px-2 py-1 font-semibold transition ${
+                                subtitlePrefs.style === st.id
+                                  ? 'bg-violet-600 text-white'
+                                  : 'bg-white/5 text-zinc-300 hover:bg-white/15'
+                              }`}
+                            >
+                              {st.label}
+                            </button>
+                          ))}
+                        </div>
+
+                        {activeTextSubIndex !== null && (
+                          <div className="flex items-center gap-1">
+                            <span className="mr-1 font-bold uppercase tracking-wider text-zinc-400">
+                              Sync
+                            </span>
+                            <button
+                              onClick={() =>
+                                setSubtitleOffsetSec((v) =>
+                                  Math.max(-5, Math.round((v - 0.25) * 100) / 100)
+                                )
+                              }
+                              className="rounded-md bg-white/5 px-2 py-1 font-mono font-bold text-zinc-200 hover:bg-white/15"
+                            >
+                              -0.25s
+                            </button>
+                            <button
+                              onClick={() => setSubtitleOffsetSec(0)}
+                              title="Reset sync offset"
+                              className={`rounded-md px-2 py-1 font-mono font-bold transition ${
+                                subtitleOffsetSec !== 0
+                                  ? 'bg-violet-600/30 text-violet-200'
+                                  : 'bg-white/5 text-zinc-300'
+                              }`}
+                            >
+                              {subtitleOffsetSec > 0
+                                ? `+${subtitleOffsetSec.toFixed(2)}s`
+                                : `${subtitleOffsetSec.toFixed(2)}s`}
+                            </button>
+                            <button
+                              onClick={() =>
+                                setSubtitleOffsetSec((v) =>
+                                  Math.min(5, Math.round((v + 0.25) * 100) / 100)
+                                )
+                              }
+                              className="rounded-md bg-white/5 px-2 py-1 font-mono font-bold text-zinc-200 hover:bg-white/15"
+                            >
+                              +0.25s
+                            </button>
+                          </div>
+                        )}
                       </div>
                     )}
                   </div>

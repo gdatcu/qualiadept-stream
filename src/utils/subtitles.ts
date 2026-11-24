@@ -173,12 +173,66 @@ export async function fetchSubtitleCues(
   throw lastError || new Error('Failed to load subtitle track');
 }
 
-export function getActiveSubtitleLines(cues: SubtitleCue[], currentTime: number): string[] {
+export type SubtitleSize = 'sm' | 'md' | 'lg' | 'xl';
+export type SubtitleStyle = 'pill' | 'outline' | 'box';
+
+export interface SubtitlePreferences {
+  size: SubtitleSize;
+  style: SubtitleStyle;
+  preferredLanguage: string | null;
+}
+
+const SUBTITLE_PREFS_KEY = 'qualiadept_subtitle_prefs_v1';
+
+const DEFAULT_SUBTITLE_PREFS: SubtitlePreferences = {
+  size: 'md',
+  style: 'pill',
+  preferredLanguage: null,
+};
+
+export function loadSubtitlePreferences(): SubtitlePreferences {
+  try {
+    const raw = localStorage.getItem(SUBTITLE_PREFS_KEY);
+    if (!raw) return DEFAULT_SUBTITLE_PREFS;
+    const parsed = JSON.parse(raw) as Partial<SubtitlePreferences>;
+    return {
+      size:
+        parsed.size === 'sm' || parsed.size === 'md' || parsed.size === 'lg' || parsed.size === 'xl'
+          ? parsed.size
+          : 'md',
+      style:
+        parsed.style === 'pill' || parsed.style === 'outline' || parsed.style === 'box'
+          ? parsed.style
+          : 'pill',
+      preferredLanguage:
+        typeof parsed.preferredLanguage === 'string' && parsed.preferredLanguage.trim()
+          ? parsed.preferredLanguage.trim().toLowerCase()
+          : null,
+    };
+  } catch {
+    return DEFAULT_SUBTITLE_PREFS;
+  }
+}
+
+export function saveSubtitlePreferences(prefs: SubtitlePreferences): void {
+  try {
+    localStorage.setItem(SUBTITLE_PREFS_KEY, JSON.stringify(prefs));
+  } catch {
+    // Ignore storage errors
+  }
+}
+
+export function getActiveSubtitleLines(
+  cues: SubtitleCue[],
+  currentTime: number,
+  offsetSeconds = 0
+): string[] {
   if (cues.length === 0) return [];
+  const adjustedTime = currentTime - offsetSeconds;
   const active: string[] = [];
   for (let i = 0; i < cues.length; i++) {
     const c = cues[i];
-    if (c.start <= currentTime && c.end >= currentTime) {
+    if (c.start <= adjustedTime && c.end >= adjustedTime) {
       active.push(c.text);
     }
   }

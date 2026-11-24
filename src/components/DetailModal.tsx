@@ -18,6 +18,7 @@ import {
   X,
 } from 'lucide-react';
 import {
+  fetchCollectionItems,
   fetchEpisodes,
   fetchItemDetails,
   fetchPersonItems,
@@ -69,6 +70,14 @@ function formatRuntimeHours(minutes?: number): string | null {
   return `${m}m`;
 }
 
+function formatChapterTime(sec: number): string {
+  const h = Math.floor(sec / 3600);
+  const m = Math.floor((sec % 3600) / 60);
+  const s = Math.floor(sec % 60);
+  const pad = (n: number) => String(n).padStart(2, '0');
+  return h > 0 ? `${h}:${pad(m)}:${pad(s)}` : `${m}:${pad(s)}`;
+}
+
 function formatEndsAt(runtimeMinutes?: number, resumeSeconds?: number): string | null {
   if (!runtimeMinutes || runtimeMinutes <= 0) return null;
   const totalSec = runtimeMinutes * 60;
@@ -112,6 +121,7 @@ export const DetailModal: React.FC<DetailModalProps> = ({
   const isTv = isTizenTv();
   const playBtnRef = useRef<HTMLButtonElement>(null);
   const scrollContainerRef = useRef<HTMLDivElement>(null);
+  const chaptersRowRef = useRef<HTMLDivElement>(null);
   const castRowRef = useRef<HTMLDivElement>(null);
   const similarRowRef = useRef<HTMLDivElement>(null);
 
@@ -119,6 +129,8 @@ export const DetailModal: React.FC<DetailModalProps> = ({
   const [selectedSeasonId, setSelectedSeasonId] = useState<string>('');
   const [episodes, setEpisodes] = useState<MediaItem[]>([]);
   const [loadingEpisodes, setLoadingEpisodes] = useState(false);
+  const [collectionItems, setCollectionItems] = useState<MediaItem[]>([]);
+  const [loadingCollection, setLoadingCollection] = useState(false);
   const [imgFailed, setImgFailed] = useState(false);
   const [posterFailed, setPosterFailed] = useState(false);
 
@@ -158,6 +170,7 @@ export const DetailModal: React.FC<DetailModalProps> = ({
     setDownloadError(null);
     setDetails(null);
     setSimilarItems([]);
+    setCollectionItems([]);
     setSelectedAudioIndex(null);
     setSelectedSubtitleIndex(null);
     setShowAllTags(false);
@@ -179,17 +192,36 @@ export const DetailModal: React.FC<DetailModalProps> = ({
       setSelectedAudioIndex(d.defaultAudioIndex);
       setSelectedSubtitleIndex(d.defaultSubtitleIndex);
     });
-    fetchSimilarItems(session, item.id).then((list) => {
-      if (active) setSimilarItems(list);
-    });
+    if (item.type !== 'BoxSet') {
+      fetchSimilarItems(session, item.id).then((list) => {
+        if (active) setSimilarItems(list);
+      });
+    }
     return () => {
       active = false;
     };
-  }, [session, item.id]);
+  }, [session, item.id, item.type]);
+
+  // Fetch Collection / BoxSet titles
+  useEffect(() => {
+    if (item.type !== 'BoxSet') return;
+    let active = true;
+    setLoadingCollection(true);
+    fetchCollectionItems(session, item.id)
+      .then((list) => {
+        if (active) setCollectionItems(list);
+      })
+      .finally(() => {
+        if (active) setLoadingCollection(false);
+      });
+    return () => {
+      active = false;
+    };
+  }, [session, item.id, item.type]);
 
   // Pre-warm PlaybackInfo + Direct Play header while user reads details (Netflix-instant Play)
   useEffect(() => {
-    if (item.type !== 'Series') {
+    if (item.type !== 'Series' && item.type !== 'BoxSet') {
       prefetchPlaybackInfo(session, item, getRecommendedQuality());
     }
   }, [session, item]);
@@ -246,13 +278,25 @@ export const DetailModal: React.FC<DetailModalProps> = ({
     };
   }, [session, item, selectedSeasonId]);
 
-  const buildStartOptions = (startFromBeginning = false): PlaybackStartOptions => ({
+  const buildStartOptions = (
+    startFromBeginning = false,
+    startAtSeconds?: number
+  ): PlaybackStartOptions => ({
     startFromBeginning,
+    startAtSeconds,
     audioIndex: selectedAudioIndex,
     subtitleIndex: selectedSubtitleIndex,
   });
 
   const handlePrimaryPlay = (startFromBeginning = false) => {
+    if (item.type === 'BoxSet') {
+      const firstPlayable = collectionItems.find((c) => c.type !== 'BoxSet');
+      if (firstPlayable) {
+        if (firstPlayable.type === 'Series') onSelectItem?.(firstPlayable);
+        else onPlay(firstPlayable, { startFromBeginning });
+      }
+      return;
+    }
     if (item.type === 'Series' && episodes.length > 0) {
       onPlay(episodes[0], { startFromBeginning });
     } else {
@@ -915,6 +959,141 @@ export const DetailModal: React.FC<DetailModalProps> = ({
                   })}
                 </div>
               )}
+            </div>
+          )}
+
+          {/* Collection / BoxSet Titles Grid */}
+          {item.type === 'BoxSet' && (
+            <div className="border-t border-white/10 pt-5">
+              <div className="mb-3 flex items-center justify-between">
+                <h3 className="text-base sm:text-lg font-bold text-white">
+                  Titles in this Collection
+                  {collectionItems.length > 0 && (
+                    <span className="ml-2 text-xs font-semibold text-zinc-400">
+                      ({collectionItems.length})
+                    </span>
+                  )}
+                </h3>
+              </div>
+              {loadingCollection ? (
+                <p className="text-xs text-zinc-400">Loading collection titles...</p>
+              ) : collectionItems.length === 0 ? (
+                <p className="text-xs text-zinc-400">No titles found in this collection.</p>
+              ) : (
+                <div className="grid grid-cols-2 gap-3.5 sm:grid-cols-4 md:grid-cols-5">
+                  {collectionItems.map((colItem) => (
+                    <button
+                      key={colItem.id}
+                      onClick={() => onSelectItem?.(colItem)}
+                      className="group text-left focus:outline-none"
+                    >
+                      <div className="relative aspect-[2/3] w-full overflow-hidden rounded-xl border border-white/10 bg-obsidian transition group-hover:border-violet-400/50">
+                        {colItem.posterUrl && (
+                          <img
+                            src={colItem.posterUrl}
+                            alt={colItem.name}
+                            loading="lazy"
+                            className="h-full w-full object-cover transition duration-300 group-hover:scale-105"
+                          />
+                        )}
+                        {colItem.isPlayed && (
+                          <span className="absolute top-1.5 left-1.5 flex h-5 w-5 items-center justify-center rounded-full bg-emerald-500/90 text-white shadow">
+                            <Check className="h-3 w-3" />
+                          </span>
+                        )}
+                        {colItem.rating && (
+                          <span className="absolute top-1.5 right-1.5 flex items-center gap-0.5 rounded-md bg-black/75 px-1.5 py-0.5 text-[10px] font-bold text-amber-300">
+                            <Star className="h-2.5 w-2.5 fill-amber-300" />
+                            {colItem.rating}
+                          </span>
+                        )}
+                      </div>
+                      <p className="mt-1.5 truncate text-xs font-bold text-white group-hover:text-violet-300">
+                        {colItem.name}
+                      </p>
+                      {colItem.year && (
+                        <p className="text-[11px] text-zinc-400">{colItem.year}</p>
+                      )}
+                    </button>
+                  ))}
+                </div>
+              )}
+            </div>
+          )}
+
+          {/* Visual Chapters Carousel (click any scene to jump straight there) */}
+          {item.type !== 'Series' && item.type !== 'BoxSet' && details && details.chapters.length > 1 && (
+            <div className="border-t border-white/10 pt-5">
+              <div className="mb-3 flex items-center justify-between">
+                <h3 className="text-base sm:text-lg font-bold text-white">
+                  Chapters
+                  <span className="ml-2 text-xs font-semibold text-zinc-400">
+                    ({details.chapters.length})
+                  </span>
+                </h3>
+                <div className="hidden sm:flex items-center gap-1.5">
+                  <button
+                    onClick={() => scrollRow(chaptersRowRef, 'left')}
+                    aria-label="Scroll chapters left"
+                    className="rounded-full border border-white/15 bg-white/5 p-1.5 text-zinc-300 transition hover:bg-white/15 hover:text-white"
+                  >
+                    <ChevronLeft className="h-4 w-4" />
+                  </button>
+                  <button
+                    onClick={() => scrollRow(chaptersRowRef, 'right')}
+                    aria-label="Scroll chapters right"
+                    className="rounded-full border border-white/15 bg-white/5 p-1.5 text-zinc-300 transition hover:bg-white/15 hover:text-white"
+                  >
+                    <ChevronRight className="h-4 w-4" />
+                  </button>
+                </div>
+              </div>
+
+              <div
+                ref={chaptersRowRef}
+                data-tv-row="detail-chapters"
+                className="flex gap-3 overflow-x-auto pb-2 scrollbar-hide"
+              >
+                {details.chapters.map((ch) => (
+                  <button
+                    key={`${ch.index}-${ch.startSeconds}`}
+                    onClick={() => onPlay(item, buildStartOptions(false, ch.startSeconds))}
+                    className="group w-44 sm:w-52 flex-shrink-0 text-left focus:outline-none"
+                  >
+                    <div className="relative aspect-video w-full overflow-hidden rounded-xl border border-white/10 bg-obsidian transition group-hover:border-violet-400/60">
+                      {ch.imageUrl ? (
+                        <img
+                          src={ch.imageUrl}
+                          alt={ch.name}
+                          loading="lazy"
+                          onError={(e) => {
+                            e.currentTarget.style.display = 'none';
+                          }}
+                          className="h-full w-full object-cover transition duration-300 group-hover:scale-105"
+                        />
+                      ) : item.backdropUrl ? (
+                        <img
+                          src={item.backdropUrl}
+                          alt={ch.name}
+                          loading="lazy"
+                          className="h-full w-full object-cover opacity-55 transition duration-300 group-hover:scale-105"
+                        />
+                      ) : null}
+                      <div className="absolute inset-0 flex items-center justify-center bg-black/30 opacity-0 transition group-hover:opacity-100">
+                        <div className="flex h-9 w-9 items-center justify-center rounded-full bg-white text-obsidian shadow-lg">
+                          <Play className="h-4 w-4 fill-obsidian ml-0.5" />
+                        </div>
+                      </div>
+                      <span className="absolute bottom-1.5 right-1.5 rounded-md bg-black/80 px-1.5 py-0.5 font-mono text-[10px] font-bold text-violet-200 backdrop-blur-sm">
+                        {formatChapterTime(ch.startSeconds)}
+                      </span>
+                    </div>
+                    <p className="mt-1.5 truncate text-xs font-semibold text-zinc-200 group-hover:text-white">
+                      {ch.name}
+                    </p>
+                  </button>
+                ))}
+              </div>
             </div>
           )}
 

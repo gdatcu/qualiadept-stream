@@ -1,5 +1,5 @@
 import React, { Suspense, lazy, useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { Star } from 'lucide-react';
+import { Folder, Star, X } from 'lucide-react';
 import { BrowseFilterBar, type SortOption } from './components/BrowseFilterBar';
 import { DetailModal } from './components/DetailModal';
 import { HeroBanner } from './components/HeroBanner';
@@ -17,13 +17,19 @@ import {
   SessionExpiredError,
   clearCachedLibrary,
   clearSession,
+  fetchCollections,
   fetchLibraryItems,
+  fetchNextUpEpisodes,
+  fetchPersonItems,
   fetchResumeItems,
+  fetchUserViews,
   loadCachedLibrary,
   loadSavedSession,
   refreshSessionProfile,
+  removeFromContinueWatching,
   removeSavedProfile,
   saveCachedLibrary,
+  searchJellyfinCatalog,
   toggleFavorite,
   togglePlayedStatus,
 } from './services/jellyfin';
@@ -32,7 +38,13 @@ import {
   listOfflineRecords,
   subscribeOfflineDownloads,
 } from './services/offlineDownloads';
-import type { AuthSession, MediaItem, PlaybackStartOptions } from './types/media';
+import type {
+  AuthSession,
+  LibraryView,
+  MediaItem,
+  PersonCredit,
+  PlaybackStartOptions,
+} from './types/media';
 import { exitTizenApp, initTvNavigation, isTizenTv } from './utils/tvNavigation';
 
 const DownloadsView = lazy(() =>
@@ -83,6 +95,15 @@ export const App: React.FC = () => {
   const [playStartOptions, setPlayStartOptions] = useState<PlaybackStartOptions | undefined>(
     undefined
   );
+  const [libraryViews, setLibraryViews] = useState<LibraryView[]>([]);
+  const [selectedLibraryId, setSelectedLibraryId] = useState<string | null>(null);
+  const [libraryViewItems, setLibraryViewItems] = useState<MediaItem[] | null>(null);
+  const [collections, setCollections] = useState<MediaItem[]>([]);
+  const [nextUpItems, setNextUpItems] = useState<MediaItem[]>([]);
+  const [remoteSearchItems, setRemoteSearchItems] = useState<MediaItem[]>([]);
+  const [remoteSearchPeople, setRemoteSearchPeople] = useState<PersonCredit[]>([]);
+  const [selectedSearchPerson, setSelectedSearchPerson] = useState<PersonCredit | null>(null);
+  const [selectedSearchPersonItems, setSelectedSearchPersonItems] = useState<MediaItem[]>([]);
   const [showExitToast, setShowExitToast] = useState(false);
   const [availableUpdate, setAvailableUpdate] = useState<AppUpdateInfo | null>(null);
   const [statusToast, setStatusToast] = useState<string | null>(null);
@@ -209,13 +230,19 @@ export const App: React.FC = () => {
       }
       setError(null);
       try {
-        const [library, resume] = await Promise.all([
+        const [library, resume, views, boxSets, nextUp] = await Promise.all([
           fetchLibraryItems(activeSession),
           fetchResumeItems(activeSession),
+          fetchUserViews(activeSession),
+          fetchCollections(activeSession),
+          fetchNextUpEpisodes(activeSession),
         ]);
         lastSyncTsRef.current = Date.now();
         setItems(library);
         setResumeItems(resume);
+        setLibraryViews(views);
+        setCollections(boxSets);
+        setNextUpItems(nextUp);
         if (!activeSession.isDemo && !activeSession.isHidden) {
           saveCachedLibrary(activeSession.userId, library, resume);
         }
@@ -240,6 +267,49 @@ export const App: React.FC = () => {
     },
     [handleSessionExpired, flashStatusToast]
   );
+
+  // Load items scoped to a specific Jellyfin Library View when selected
+  useEffect(() => {
+    if (!session || !selectedLibraryId) {
+      setLibraryViewItems(null);
+      return;
+    }
+    let active = true;
+    fetchLibraryItems(session, selectedLibraryId)
+      .then((list) => {
+        if (active) setLibraryViewItems(list);
+      })
+      .catch(() => {
+        if (active) setLibraryViewItems([]);
+      });
+    return () => {
+      active = false;
+    };
+  }, [session, selectedLibraryId]);
+
+  // Debounced live Jellyfin server search (finds actors, directors, tags, and collections)
+  useEffect(() => {
+    const q = searchQuery.trim();
+    setSelectedSearchPerson(null);
+    setSelectedSearchPersonItems([]);
+    if (!session || session.isDemo || q.length < 2) {
+      setRemoteSearchItems([]);
+      setRemoteSearchPeople([]);
+      return;
+    }
+    let active = true;
+    const timer = window.setTimeout(() => {
+      searchJellyfinCatalog(session, q).then(({ items: foundItems, people: foundPeople }) => {
+        if (!active) return;
+        setRemoteSearchItems(foundItems);
+        setRemoteSearchPeople(foundPeople);
+      });
+    }, 250);
+    return () => {
+      active = false;
+      window.clearTimeout(timer);
+    };
+  }, [session, searchQuery]);
 
   useEffect(() => {
     return initTvNavigation();
@@ -470,6 +540,34 @@ export const App: React.FC = () => {
     }
   };
 
+  const handleRemoveContinueWatching = async (item: MediaItem) => {
+    if (!session) return;
+    setResumeItems((prev) => prev.filter((i) => i.id !== item.id));
+    setItems((prev) =>
+      prev.map((i) =>
+        i.id === item.id ? { ...i, playedPercentage: 0, resumePositionSeconds: undefined } : i
+      )
+    );
+    try {
+      await removeFromContinueWatching(session, item.id);
+      flashStatusToast(`Removed "${item.name}" from Continue Watching`);
+    } catch {
+      flashStatusToast('Could not update Continue Watching');
+    }
+  };
+
+  const handleSelectSearchPerson = async (person: PersonCredit) => {
+    if (!session) return;
+    if (selectedSearchPerson?.id === person.id) {
+      setSelectedSearchPerson(null);
+      setSelectedSearchPersonItems([]);
+      return;
+    }
+    setSelectedSearchPerson(person);
+    const list = await fetchPersonItems(session, person.id);
+    setSelectedSearchPersonItems(list);
+  };
+
   const handleSearchChange = (q: string) => {
     setSearchQuery(q);
     if (q.trim() && (activeTab === 'downloads' || activeTab === 'family')) {
@@ -480,16 +578,22 @@ export const App: React.FC = () => {
   const handleTabChange = (tab: NavTab) => {
     setActiveTab(tab);
     setSelectedGenre(null);
+    if (tab !== 'home') {
+      setSelectedLibraryId(null);
+    }
   };
 
   const tabBaseItems = useMemo(() => {
-    return items.filter((item) => {
+    const source = activeTab === 'home' && selectedLibraryId && libraryViewItems !== null
+      ? libraryViewItems
+      : items;
+    return source.filter((item) => {
       if (activeTab === 'movies' && item.type !== 'Movie') return false;
       if (activeTab === 'series' && item.type !== 'Series') return false;
       if (activeTab === 'mylist' && !item.isFavorite) return false;
       return true;
     });
-  }, [items, activeTab]);
+  }, [items, libraryViewItems, selectedLibraryId, activeTab]);
 
   const availableGenres = useMemo(() => {
     const counts = new Map<string, number>();
@@ -505,8 +609,12 @@ export const App: React.FC = () => {
   }, [tabBaseItems]);
 
   const filteredItems = useMemo(() => {
+    if (selectedSearchPerson) {
+      return selectedSearchPersonItems;
+    }
+
     const q = searchQuery.trim().toLowerCase();
-    const matched = tabBaseItems.filter((item) => {
+    const localMatched = tabBaseItems.filter((item) => {
       if (selectedGenre && !item.genres.includes(selectedGenre)) return false;
       if (!q) return true;
       return (
@@ -516,6 +624,22 @@ export const App: React.FC = () => {
         item.genres.some((g) => g.toLowerCase().includes(q))
       );
     });
+
+    // Merge server-side Jellyfin search hits (collections, tags, aliases) without duplicates
+    let matched = localMatched;
+    if (q && remoteSearchItems.length > 0 && !selectedGenre) {
+      const seen = new Set(localMatched.map((i) => i.id));
+      const extras = remoteSearchItems.filter((i) => {
+        if (seen.has(i.id)) return false;
+        if (activeTab === 'movies' && i.type !== 'Movie') return false;
+        if (activeTab === 'series' && i.type !== 'Series') return false;
+        if (activeTab === 'mylist' && !i.isFavorite) return false;
+        return true;
+      });
+      if (extras.length > 0) {
+        matched = [...localMatched, ...extras];
+      }
+    }
 
     if (sortBy === 'rating') {
       return [...matched].sort((a, b) => (b.rating ?? 0) - (a.rating ?? 0));
@@ -527,7 +651,16 @@ export const App: React.FC = () => {
       return [...matched].sort((a, b) => a.name.localeCompare(b.name));
     }
     return matched;
-  }, [tabBaseItems, selectedGenre, searchQuery, sortBy]);
+  }, [
+    tabBaseItems,
+    selectedGenre,
+    searchQuery,
+    sortBy,
+    remoteSearchItems,
+    selectedSearchPerson,
+    selectedSearchPersonItems,
+    activeTab,
+  ]);
 
   const genreRows = useMemo(() => {
     const map = new Map<string, MediaItem[]>();
@@ -639,14 +772,76 @@ export const App: React.FC = () => {
                 : 'pt-[calc(7.5rem+var(--app-safe-top))]'
             }`}
           >
-            {activeTab === 'home' && !isFilteredGridMode && resumeItems.length > 0 && (
+            {activeTab === 'home' && !isFilteredGridMode && !selectedLibraryId && resumeItems.length > 0 && (
               <MediaRow
                 title="Continue Watching"
                 items={resumeItems}
                 showProgress
                 onSelect={setSelectedItem}
-                onPlay={setPlayingItem}
+                onPlay={(item) => {
+                  setPlayStartOptions(undefined);
+                  setPlayingItem(item);
+                }}
+                onToggleFavorite={handleToggleFavorite}
+                onTogglePlayed={handleTogglePlayed}
+                onRemoveContinueWatching={handleRemoveContinueWatching}
               />
+            )}
+
+            {activeTab === 'home' && !isFilteredGridMode && !selectedLibraryId && nextUpItems.length > 0 && (
+              <MediaRow
+                title="Up Next"
+                items={nextUpItems}
+                onSelect={setSelectedItem}
+                onPlay={(item) => {
+                  setPlayStartOptions(undefined);
+                  setPlayingItem(item);
+                }}
+                onToggleFavorite={handleToggleFavorite}
+                onTogglePlayed={handleTogglePlayed}
+              />
+            )}
+
+            {/* Real Jellyfin Library View Pills (e.g. All Libraries · Movies · Shows · Private) */}
+            {activeTab === 'home' && libraryViews.length > 1 && !searchQuery.trim() && (
+              <div
+                data-tv-row="library-views"
+                className="no-scrollbar mb-3 flex items-center gap-2 overflow-x-auto px-4 sm:px-8"
+              >
+                <button
+                  onClick={() => {
+                    setSelectedLibraryId(null);
+                    setSelectedGenre(null);
+                  }}
+                  className={`flex flex-shrink-0 items-center gap-1.5 rounded-full border px-3.5 py-1.5 text-xs font-bold transition ${
+                    selectedLibraryId === null
+                      ? 'border-violet-400 bg-violet-600 text-white shadow-lg shadow-violet-900/30'
+                      : 'border-white/15 bg-white/5 text-zinc-300 hover:bg-white/15 hover:text-white'
+                  }`}
+                >
+                  <Folder className="h-3.5 w-3.5" />
+                  All Libraries
+                </button>
+                {libraryViews.map((view) => {
+                  const active = selectedLibraryId === view.id;
+                  return (
+                    <button
+                      key={view.id}
+                      onClick={() => {
+                        setSelectedLibraryId(active ? null : view.id);
+                        setSelectedGenre(null);
+                      }}
+                      className={`flex flex-shrink-0 items-center gap-1.5 rounded-full border px-3.5 py-1.5 text-xs font-bold transition ${
+                        active
+                          ? 'border-violet-400 bg-violet-600 text-white shadow-lg shadow-violet-900/30'
+                          : 'border-white/15 bg-white/5 text-zinc-300 hover:bg-white/15 hover:text-white'
+                      }`}
+                    >
+                      {view.name}
+                    </button>
+                  );
+                })}
+              </div>
             )}
 
             {/* Prominent Search + Genre Filter Pills + Sort Bar */}
@@ -661,19 +856,64 @@ export const App: React.FC = () => {
               totalMatching={filteredItems.length}
             />
 
+            {/* Matching Actors / Directors from live Jellyfin Search */}
+            {searchQuery.trim().length >= 2 && remoteSearchPeople.length > 0 && (
+              <div className="mb-5 px-4 sm:px-8">
+                <div className="mb-2 text-xs font-bold uppercase tracking-wider text-zinc-400">
+                  Cast &amp; Crew
+                </div>
+                <div className="no-scrollbar flex items-center gap-2.5 overflow-x-auto pb-1">
+                  {remoteSearchPeople.map((person) => {
+                    const active = selectedSearchPerson?.id === person.id;
+                    return (
+                      <button
+                        key={person.id}
+                        onClick={() => handleSelectSearchPerson(person)}
+                        className={`flex flex-shrink-0 items-center gap-2.5 rounded-full border py-1 pl-1.5 pr-3.5 text-xs font-bold transition ${
+                          active
+                            ? 'border-violet-400 bg-violet-600 text-white shadow-lg'
+                            : 'border-white/15 bg-white/5 text-zinc-200 hover:bg-white/15'
+                        }`}
+                      >
+                        <div className="h-7 w-7 overflow-hidden rounded-full bg-surface-elevated flex-shrink-0 flex items-center justify-center text-[10px] font-black text-zinc-300">
+                          {person.avatarUrl ? (
+                            <img
+                              src={person.avatarUrl}
+                              alt={person.name}
+                              className="h-full w-full object-cover"
+                            />
+                          ) : (
+                            person.name.charAt(0).toUpperCase()
+                          )}
+                        </div>
+                        <span>{person.name}</span>
+                        {active && <X className="h-3.5 w-3.5" />}
+                      </button>
+                    );
+                  })}
+                </div>
+              </div>
+            )}
+
             {filteredItems.length === 0 ? (
               <div className="px-8 py-16 text-center text-zinc-400">
-                {searchQuery.trim() || selectedGenre ? (
+                {searchQuery.trim() || selectedGenre || selectedSearchPerson ? (
                   <div>
                     <p className="text-sm text-zinc-300">
                       No titles found
+                      {selectedSearchPerson ? ` featuring ${selectedSearchPerson.name}` : ''}
                       {selectedGenre ? ` in ${selectedGenre}` : ''}
-                      {searchQuery.trim() ? ` matching "${searchQuery.trim()}"` : ''}.
+                      {searchQuery.trim() && !selectedSearchPerson
+                        ? ` matching "${searchQuery.trim()}"`
+                        : ''}
+                      .
                     </p>
                     <button
                       onClick={() => {
                         setSearchQuery('');
                         setSelectedGenre(null);
+                        setSelectedSearchPerson(null);
+                        setSelectedSearchPersonItems([]);
                       }}
                       className="mt-4 rounded-xl bg-violet-600 px-4 py-2 text-xs font-semibold text-white hover:bg-violet-500"
                     >
@@ -681,17 +921,28 @@ export const App: React.FC = () => {
                     </button>
                   </div>
                 ) : activeTab === 'mylist' ? (
-                  'Your list is empty. Click the + button on any movie or series to save it here.'
+                  'Your list is empty. Click the heart button on any movie or series to save it here.'
                 ) : (
                   'No titles in this library yet.'
                 )}
               </div>
-            ) : isFilteredGridMode || activeTab === 'movies' || activeTab === 'series' || activeTab === 'mylist' ? (
+            ) : isFilteredGridMode ||
+              selectedSearchPerson ||
+              selectedLibraryId ||
+              activeTab === 'movies' ||
+              activeTab === 'series' ||
+              activeTab === 'mylist' ? (
               <section className="px-4 sm:px-8">
                 <div className="mb-4 flex items-center justify-between">
                   <h2 className="text-lg sm:text-xl font-bold text-white">
-                    {searchQuery.trim()
+                    {selectedSearchPerson
+                      ? `Titles with ${selectedSearchPerson.name}`
+                      : searchQuery.trim()
                       ? `Results for "${searchQuery.trim()}"${selectedGenre ? ` · ${selectedGenre}` : ''}`
+                      : selectedLibraryId
+                      ? `${libraryViews.find((v) => v.id === selectedLibraryId)?.name || 'Library'}${
+                          selectedGenre ? ` · ${selectedGenre}` : ''
+                        }`
                       : selectedGenre
                       ? `${selectedGenre}${
                           activeTab === 'movies'
@@ -739,7 +990,11 @@ export const App: React.FC = () => {
                           />
                         )}
                         <div className="absolute top-2 left-2 rounded-md bg-black/70 px-1.5 py-0.5 text-[10px] font-bold uppercase tracking-wider text-zinc-200 backdrop-blur-sm">
-                          {item.type === 'Series' ? 'Series' : 'Movie'}
+                          {item.type === 'Series'
+                            ? 'Series'
+                            : item.type === 'BoxSet'
+                            ? 'Collection'
+                            : 'Movie'}
                         </div>
                         {item.rating && (
                           <div className="absolute top-2 right-2 flex items-center gap-0.5 rounded-md bg-black/70 px-1.5 py-0.5 text-[10px] font-bold text-amber-300 backdrop-blur-sm">
@@ -766,11 +1021,22 @@ export const App: React.FC = () => {
                   items={filteredItems}
                   onSelect={setSelectedItem}
                   onPlay={(item) =>
-                    item.type === 'Series'
+                    item.type === 'Series' || item.type === 'BoxSet'
                       ? setSelectedItem(item)
-                      : setPlayingItem(item)
+                      : (setPlayStartOptions(undefined), setPlayingItem(item))
                   }
+                  onToggleFavorite={handleToggleFavorite}
+                  onTogglePlayed={handleTogglePlayed}
                 />
+
+                {collections.length > 0 && (
+                  <MediaRow
+                    title="Collections"
+                    items={collections}
+                    onSelect={setSelectedItem}
+                    onPlay={setSelectedItem}
+                  />
+                )}
 
                 {genreRows.map(([genre, list]) => (
                   <MediaRow
@@ -779,10 +1045,12 @@ export const App: React.FC = () => {
                     items={list}
                     onSelect={setSelectedItem}
                     onPlay={(item) =>
-                      item.type === 'Series'
+                      item.type === 'Series' || item.type === 'BoxSet'
                         ? setSelectedItem(item)
-                        : setPlayingItem(item)
+                        : (setPlayStartOptions(undefined), setPlayingItem(item))
                     }
+                    onToggleFavorite={handleToggleFavorite}
+                    onTogglePlayed={handleTogglePlayed}
                   />
                 ))}
               </>

@@ -1,4 +1,10 @@
-export type MediaType = 'Movie' | 'Series' | 'Episode';
+export type MediaType = 'Movie' | 'Series' | 'Episode' | 'BoxSet';
+
+export interface LibraryView {
+  id: string;
+  name: string;
+  collectionType?: string;
+}
 
 export type QualityPreset = 'auto' | '1080p' | '720p' | '480p' | '360p';
 
@@ -48,8 +54,10 @@ export interface PersonCredit {
 }
 
 export interface ChapterItem {
+  index: number;
   name: string;
   startSeconds: number;
+  imageUrl?: string;
 }
 
 export interface RemoteTrailer {
@@ -78,6 +86,7 @@ export interface MediaItemDetails {
 
 export interface PlaybackStartOptions {
   startFromBeginning?: boolean;
+  startAtSeconds?: number;
   audioIndex?: number | null;
   /** null = explicitly Off, number = specific subtitle stream index, undefined = player default */
   subtitleIndex?: number | null;

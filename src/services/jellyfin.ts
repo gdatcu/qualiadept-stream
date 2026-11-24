@@ -6,6 +6,7 @@ import {
   type AuthSession,
   type ChapterItem,
   type FamilyUser,
+  type LibraryView,
   type MediaItem,
   type MediaItemDetails,
   type ParentalTier,
@@ -449,7 +450,14 @@ function mapJellyfinItem(raw: RawJellyfinItem, session: AuthSession): MediaItem 
   return {
     id: raw.Id,
     name: raw.Name,
-    type: raw.Type === 'Series' ? 'Series' : raw.Type === 'Episode' ? 'Episode' : 'Movie',
+    type:
+      raw.Type === 'Series'
+        ? 'Series'
+        : raw.Type === 'Episode'
+        ? 'Episode'
+        : raw.Type === 'BoxSet'
+        ? 'BoxSet'
+        : 'Movie',
     overview: raw.Overview || 'No description available.',
     year: raw.ProductionYear,
     rating: raw.CommunityRating ? Number(raw.CommunityRating.toFixed(1)) : undefined,
@@ -479,7 +487,32 @@ function getDemoFavorites(): Set<string> {
   }
 }
 
-export async function fetchLibraryItems(session: AuthSession): Promise<MediaItem[]> {
+export async function fetchUserViews(session: AuthSession): Promise<LibraryView[]> {
+  if (session.isDemo) return [];
+  try {
+    const res = await fetch(`${session.serverUrl}/Users/${session.userId}/Views`, {
+      headers: { Authorization: buildAuthHeader(session.accessToken) },
+    });
+    if (!res.ok) return [];
+    const data = (await res.json()) as {
+      Items?: Array<{ Id: string; Name: string; CollectionType?: string }>;
+    };
+    return (data.Items || [])
+      .filter((v) => v.CollectionType !== 'boxsets' && v.CollectionType !== 'playlists')
+      .map((v) => ({
+        id: v.Id,
+        name: v.Name,
+        collectionType: v.CollectionType,
+      }));
+  } catch {
+    return [];
+  }
+}
+
+export async function fetchLibraryItems(
+  session: AuthSession,
+  parentId?: string
+): Promise<MediaItem[]> {
   if (session.isDemo) {
     const favs = getDemoFavorites();
     return DEMO_ITEMS.map((item) => ({ ...item, isFavorite: favs.has(item.id) }));
@@ -493,6 +526,9 @@ export async function fetchLibraryItems(session: AuthSession): Promise<MediaItem
     Fields: 'Overview,Genres,RunTimeTicks,OfficialRating,CommunityRating,UserData',
     Limit: '1000',
   });
+  if (parentId) {
+    params.set('ParentId', parentId);
+  }
 
   const res = await fetchWithRetry(
     `${session.serverUrl}/Users/${session.userId}/Items?${params.toString()}`,
@@ -505,6 +541,58 @@ export async function fetchLibraryItems(session: AuthSession): Promise<MediaItem
   if (!res.ok) throw new Error(`Failed to fetch library (HTTP ${res.status})`);
   const data = await res.json();
   return (data.Items as RawJellyfinItem[]).map((raw) => mapJellyfinItem(raw, session));
+}
+
+export async function fetchCollections(session: AuthSession): Promise<MediaItem[]> {
+  if (session.isDemo) return [];
+  try {
+    const params = new URLSearchParams({
+      IncludeItemTypes: 'BoxSet',
+      Recursive: 'true',
+      SortBy: 'SortName',
+      SortOrder: 'Ascending',
+      Fields: 'Overview,Genres,CommunityRating,UserData',
+      Limit: '100',
+    });
+    const res = await fetch(
+      `${session.serverUrl}/Users/${session.userId}/Items?${params.toString()}`,
+      {
+        headers: { Authorization: buildAuthHeader(session.accessToken) },
+      }
+    );
+    if (!res.ok) return [];
+    const data = await res.json();
+    return (data.Items as RawJellyfinItem[]).map((raw) => mapJellyfinItem(raw, session));
+  } catch {
+    return [];
+  }
+}
+
+export async function fetchCollectionItems(
+  session: AuthSession,
+  collectionId: string
+): Promise<MediaItem[]> {
+  if (session.isDemo) return [];
+  try {
+    const params = new URLSearchParams({
+      ParentId: collectionId,
+      SortBy: 'ProductionYear,SortName',
+      SortOrder: 'Ascending',
+      Fields: 'Overview,Genres,RunTimeTicks,OfficialRating,CommunityRating,UserData',
+      Limit: '100',
+    });
+    const res = await fetch(
+      `${session.serverUrl}/Users/${session.userId}/Items?${params.toString()}`,
+      {
+        headers: { Authorization: buildAuthHeader(session.accessToken) },
+      }
+    );
+    if (!res.ok) return [];
+    const data = await res.json();
+    return (data.Items as RawJellyfinItem[]).map((raw) => mapJellyfinItem(raw, session));
+  } catch {
+    return [];
+  }
 }
 
 export async function fetchResumeItems(session: AuthSession): Promise<MediaItem[]> {
@@ -529,6 +617,105 @@ export async function fetchResumeItems(session: AuthSession): Promise<MediaItem[
   if (!res.ok) return [];
   const data = await res.json();
   return (data.Items as RawJellyfinItem[]).map((raw) => mapJellyfinItem(raw, session));
+}
+
+export async function fetchNextUpEpisodes(session: AuthSession): Promise<MediaItem[]> {
+  if (session.isDemo) return [];
+  try {
+    const params = new URLSearchParams({
+      UserId: session.userId,
+      Limit: '15',
+      Fields: 'Overview,Genres,RunTimeTicks,UserData',
+    });
+    const res = await fetch(`${session.serverUrl}/Shows/NextUp?${params.toString()}`, {
+      headers: { Authorization: buildAuthHeader(session.accessToken) },
+    });
+    if (!res.ok) return [];
+    const data = await res.json();
+    return (data.Items as RawJellyfinItem[]).map((raw) => mapJellyfinItem(raw, session));
+  } catch {
+    return [];
+  }
+}
+
+export async function removeFromContinueWatching(
+  session: AuthSession,
+  itemId: string
+): Promise<void> {
+  if (session.isDemo) return;
+  const headers = { Authorization: buildAuthHeader(session.accessToken) };
+  // Marking played then unplayed resets PlaybackPositionTicks to 0 cleanly across all Jellyfin versions
+  await fetch(`${session.serverUrl}/Users/${session.userId}/PlayedItems/${itemId}`, {
+    method: 'POST',
+    headers,
+  });
+  await fetch(`${session.serverUrl}/Users/${session.userId}/PlayedItems/${itemId}`, {
+    method: 'DELETE',
+    headers,
+  });
+  itemDetailsCache.delete(`${session.userId}:${itemId}`);
+}
+
+export async function searchJellyfinCatalog(
+  session: AuthSession,
+  query: string
+): Promise<{ items: MediaItem[]; people: PersonCredit[] }> {
+  const trimmed = query.trim();
+  if (!trimmed || session.isDemo) return { items: [], people: [] };
+
+  try {
+    const headers = { Authorization: buildAuthHeader(session.accessToken) };
+    const itemParams = new URLSearchParams({
+      SearchTerm: trimmed,
+      Recursive: 'true',
+      IncludeItemTypes: 'Movie,Series,Video,BoxSet',
+      Fields: 'Overview,Genres,RunTimeTicks,OfficialRating,CommunityRating,UserData',
+      Limit: '30',
+    });
+    const personParams = new URLSearchParams({
+      SearchTerm: trimmed,
+      UserId: session.userId,
+      Limit: '10',
+    });
+
+    const [itemsRes, peopleRes] = await Promise.all([
+      fetch(`${session.serverUrl}/Users/${session.userId}/Items?${itemParams.toString()}`, {
+        headers,
+      }),
+      fetch(`${session.serverUrl}/Persons?${personParams.toString()}`, { headers }),
+    ]);
+
+    const items: MediaItem[] = itemsRes.ok
+      ? (((await itemsRes.json()).Items || []) as RawJellyfinItem[]).map((raw) =>
+          mapJellyfinItem(raw, session)
+        )
+      : [];
+
+    const token = encodeURIComponent(session.accessToken);
+    const people: PersonCredit[] = peopleRes.ok
+      ? (
+          ((await peopleRes.json()).Items || []) as Array<{
+            Id?: string;
+            Name?: string;
+            Type?: string;
+            ImageTags?: { Primary?: string };
+          }>
+        )
+          .filter((p) => Boolean(p.Id && p.Name))
+          .map((p) => ({
+            id: p.Id!,
+            name: p.Name!,
+            type: p.Type || 'Person',
+            avatarUrl: p.ImageTags?.Primary
+              ? `${session.serverUrl}/Items/${p.Id}/Images/Primary?tag=${encodeURIComponent(p.ImageTags.Primary)}&fillWidth=300&fillHeight=450&quality=85&api_key=${token}`
+              : undefined,
+          }))
+      : [];
+
+    return { items, people };
+  } catch {
+    return { items: [], people: [] };
+  }
 }
 
 export async function fetchSeasons(
@@ -663,7 +850,7 @@ export async function fetchItemDetails(
       ProviderIds?: { Imdb?: string; Tmdb?: string };
       Studios?: Array<{ Name?: string }>;
       RemoteTrailers?: Array<{ Name?: string; Url?: string }>;
-      Chapters?: Array<{ Name?: string; StartPositionTicks?: number }>;
+      Chapters?: Array<{ Name?: string; StartPositionTicks?: number; ImageTag?: string }>;
       UserData?: { Played?: boolean };
       People?: Array<{
         Id?: string;
@@ -712,10 +899,15 @@ export async function fetchItemDetails(
       }));
 
     const chapters: ChapterItem[] = (raw.Chapters || [])
-      .filter((c) => typeof c.StartPositionTicks === 'number')
-      .map((c, idx) => ({
+      .map((c, idx) => ({ c, idx }))
+      .filter(({ c }) => typeof c.StartPositionTicks === 'number')
+      .map(({ c, idx }) => ({
+        index: idx,
         name: c.Name?.trim() || `Chapter ${idx + 1}`,
         startSeconds: Math.max(0, Math.floor((c.StartPositionTicks || 0) / 10_000_000)),
+        imageUrl: c.ImageTag
+          ? `${base}/Items/${itemId}/Images/Chapter/${idx}?tag=${encodeURIComponent(c.ImageTag)}&maxWidth=400&quality=80&api_key=${token}`
+          : undefined,
       }))
       .sort((a, b) => a.startSeconds - b.startSeconds);
 
