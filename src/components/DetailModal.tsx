@@ -926,8 +926,13 @@ export const DetailModal: React.FC<DetailModalProps> = ({
                         </div>
                         <div className="min-w-0 flex-1">
                           <div className="flex items-center justify-between gap-2">
-                            <h4 className="truncate text-sm font-semibold text-white">
-                              {ep.name}
+                            <h4 className="flex min-w-0 items-center gap-2 text-sm font-semibold text-white">
+                              {ep.episodeNumber != null && (
+                                <span className="flex-shrink-0 rounded bg-white/10 px-1.5 py-0.5 font-mono text-[11px] font-bold text-violet-300">
+                                  E{String(ep.episodeNumber).padStart(2, '0')}
+                                </span>
+                              )}
+                              <span className="truncate">{ep.name}</span>
                             </h4>
                             {ep.runtimeMinutes && (
                               <span className="text-xs text-zinc-400 flex-shrink-0">
