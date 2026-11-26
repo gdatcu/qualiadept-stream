@@ -356,19 +356,12 @@ export const DetailModal: React.FC<DetailModalProps> = ({
 
   const selectedSeason = seasons.find((s) => s.id === selectedSeasonId) || seasons[0] || null;
   const firstEpisode = episodes[0] || null;
-  const formatEpisodeCode = (seasonNum?: number, epNum?: number): string | null => {
-    if (epNum == null) return null;
-    if (seasonNum != null) return `S${seasonNum}E${String(epNum).padStart(2, '0')}`;
-    return `E${String(epNum).padStart(2, '0')}`;
-  };
-  const firstEpCode = formatEpisodeCode(
-    firstEpisode?.seasonNumber ?? selectedSeason?.seasonNumber,
-    firstEpisode?.episodeNumber
-  );
   const seriesPlayLabel = firstEpisode?.resumePositionSeconds
-    ? `Resume ${firstEpCode || 'Episode'}`
-    : firstEpCode
-    ? `Play ${firstEpCode}`
+    ? firstEpisode.episodeNumber != null
+      ? `Resume Episode ${firstEpisode.episodeNumber}`
+      : 'Resume'
+    : firstEpisode?.episodeNumber != null
+    ? `Play Episode ${firstEpisode.episodeNumber}`
     : 'Play';
 
   const runtimeLabel = formatRuntimeHours(item.runtimeMinutes);
@@ -902,10 +895,6 @@ export const DetailModal: React.FC<DetailModalProps> = ({
                   {episodes.map((ep) => {
                     const epOffline = getOfflineRecord(ep.id);
                     const epActive = getActiveDownload(ep.id);
-                    const epCode = formatEpisodeCode(
-                      ep.seasonNumber ?? selectedSeason?.seasonNumber,
-                      ep.episodeNumber
-                    );
                     return (
                       <div
                         key={ep.id}
@@ -937,13 +926,8 @@ export const DetailModal: React.FC<DetailModalProps> = ({
                         </div>
                         <div className="min-w-0 flex-1">
                           <div className="flex items-center justify-between gap-2">
-                            <h4 className="flex min-w-0 items-center gap-2 text-sm font-semibold text-white">
-                              {epCode && (
-                                <span className="flex-shrink-0 rounded bg-white/10 px-1.5 py-0.5 font-mono text-[11px] font-bold text-violet-300">
-                                  {epCode}
-                                </span>
-                              )}
-                              <span className="truncate">{ep.name}</span>
+                            <h4 className="truncate text-sm font-semibold text-white">
+                              {ep.name}
                             </h4>
                             {ep.runtimeMinutes && (
                               <span className="text-xs text-zinc-400 flex-shrink-0">
