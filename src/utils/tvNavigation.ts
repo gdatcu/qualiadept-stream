@@ -18,8 +18,13 @@ function getTizen(): TizenGlobal | null {
   }
 }
 
+let cachedIsTizenTv: boolean | null = null;
+
 export function isTizenTv(): boolean {
-  return Boolean(getTizen()) || /Tizen/i.test(navigator.userAgent);
+  if (cachedIsTizenTv === null) {
+    cachedIsTizenTv = Boolean(getTizen()) || /Tizen/i.test(navigator.userAgent);
+  }
+  return cachedIsTizenTv;
 }
 
 export function exitTizenApp(): void {
@@ -38,77 +43,107 @@ const FOCUSABLE_SELECTOR = [
   '[tabindex]:not([tabindex="-1"])',
 ].join(', ');
 
-function isVisible(el: HTMLElement): boolean {
-  const rect = el.getBoundingClientRect();
-  if (rect.width <= 0 || rect.height <= 0) return false;
-  // Computed pointer-events inherits from ancestors while honoring pointer-events-auto on the button itself
-  const elStyle = window.getComputedStyle(el);
-  if (elStyle.pointerEvents === 'none' || elStyle.visibility === 'hidden') return false;
-  // Walk ancestors to ignore elements inside hidden overlays (opacity-0 / display: none)
-  let cur: HTMLElement | null = el;
-  while (cur && cur !== document.body) {
-    const style = window.getComputedStyle(cur);
+/**
+ * Per-navigation memoized visibility checker: avoids calling getComputedStyle()
+ * thousands of times on shared ancestor containers during a single D-pad press.
+ */
+function createVisibilityChecker() {
+  const ancestorCache = new WeakMap<HTMLElement, boolean>();
+
+  const isAncestorVisible = (el: HTMLElement | null): boolean => {
+    if (!el || el === document.body || el === document.documentElement) return true;
+    const cached = ancestorCache.get(el);
+    if (cached !== undefined) return cached;
+
+    const style = window.getComputedStyle(el);
+    const visible =
+      style.display !== 'none' &&
+      style.visibility !== 'hidden' &&
+      parseFloat(style.opacity || '1') >= 0.05 &&
+      isAncestorVisible(el.parentElement);
+
+    ancestorCache.set(el, visible);
+    return visible;
+  };
+
+  return (el: HTMLElement): boolean => {
+    if (el.offsetWidth === 0 && el.offsetHeight === 0 && el.getClientRects().length === 0) {
+      return false;
+    }
+    const elStyle = window.getComputedStyle(el);
     if (
-      style.display === 'none' ||
-      style.visibility === 'hidden' ||
-      parseFloat(style.opacity || '1') < 0.05
+      elStyle.pointerEvents === 'none' ||
+      elStyle.visibility === 'hidden' ||
+      elStyle.display === 'none' ||
+      parseFloat(elStyle.opacity || '1') < 0.05
     ) {
       return false;
     }
-    cur = cur.parentElement;
-  }
-  return true;
+    return isAncestorVisible(el.parentElement);
+  };
 }
 
-function scrollFocusedIntoView(el: HTMLElement) {
+function focusAndScrollIntoView(el: HTMLElement, horizontalOnly = false) {
   const onTv = isTizenTv();
+  try {
+    el.focus({ preventScroll: onTv });
+  } catch {
+    el.focus();
+  }
+
+  if (onTv) {
+    // Fast direct scroll on horizontal row containers avoids stacked smooth-scroll frame drops on Tizen TV
+    const row = el.closest('[data-tv-row]') as HTMLElement | null;
+    if (row && row.scrollWidth > row.clientWidth) {
+      const targetLeft = el.offsetLeft - (row.clientWidth - el.offsetWidth) / 2;
+      row.scrollLeft = Math.max(0, Math.min(row.scrollWidth - row.clientWidth, targetLeft));
+    }
+    if (!horizontalOnly) {
+      el.scrollIntoView({
+        behavior: 'auto',
+        block: 'center',
+        inline: 'nearest',
+      });
+    }
+    return;
+  }
+
   el.scrollIntoView({
     behavior: 'smooth',
-    block: onTv ? 'center' : 'nearest',
-    inline: onTv ? 'center' : 'nearest',
+    block: 'nearest',
+    inline: 'nearest',
   });
 }
 
-function getVisibleFocusables(root: ParentNode): HTMLElement[] {
+function getVisibleFocusables(
+  root: ParentNode,
+  isVisible: (el: HTMLElement) => boolean
+): HTMLElement[] {
   return Array.from(root.querySelectorAll<HTMLElement>(FOCUSABLE_SELECTOR)).filter(isVisible);
 }
 
 export function moveTvFocus(direction: 'ArrowUp' | 'ArrowDown' | 'ArrowLeft' | 'ArrowRight'): boolean {
   const active = document.activeElement as HTMLElement | null;
+  const isVisible = createVisibilityChecker();
 
   // Prefer open player menus (Subtitles / Audio / Quality), then modals, then full document
   const playerMenu = document.querySelector('[data-tv-player-menu="true"]') as HTMLElement | null;
-  const activeOverlay = active?.closest('[data-tv-scope="modal"]') as HTMLElement | null;
-  const root: ParentNode =
-    playerMenu ||
-    activeOverlay ||
-    (document.querySelector('[data-tv-scope="modal"]') as HTMLElement | null) ||
-    document;
+  const openModal = document.querySelector('[data-tv-scope="modal"]') as HTMLElement | null;
+  const activeInModalScope = !openModal || Boolean(active && openModal.contains(active));
 
-  const allVisible = getVisibleFocusables(root);
-  if (allVisible.length === 0) return false;
+  // Ultra-fast horizontal path: stay inside the active [data-tv-row] without scanning the entire DOM!
+  const currentRow =
+    !playerMenu && activeInModalScope && active && active !== document.body
+      ? (active.closest('[data-tv-row]') as HTMLElement | null)
+      : null;
 
-  if (!active || !isVisible(active) || active === document.body || (playerMenu && !playerMenu.contains(active))) {
-    const preferred =
-      (root.querySelector('[data-tv-default-focus="true"]') as HTMLElement | null) || allVisible[0];
-    const target = preferred && isVisible(preferred) ? preferred : allVisible[0];
-    target.focus();
-    scrollFocusedIntoView(target);
-    return true;
-  }
-
-  // Deterministic row-based navigation for elements inside [data-tv-row] (e.g. VideoPlayer HUD bars, Navbar, Genre pills)
-  const currentRow = !playerMenu ? (active.closest('[data-tv-row]') as HTMLElement | null) : null;
-  if (currentRow && (direction === 'ArrowLeft' || direction === 'ArrowRight')) {
-    const rowItems = getVisibleFocusables(currentRow).sort(
-      (a, b) => a.getBoundingClientRect().left - b.getBoundingClientRect().left
-    );
-    const idx = rowItems.indexOf(active);
+  if (currentRow && (direction === 'ArrowLeft' || direction === 'ArrowRight') && isVisible(active!)) {
+    const rowItems = getVisibleFocusables(currentRow, isVisible);
+    const idx = rowItems.indexOf(active!);
     if (idx !== -1) {
       const nextIdx = direction === 'ArrowRight' ? idx + 1 : idx - 1;
       if (nextIdx >= 0 && nextIdx < rowItems.length) {
-        rowItems[nextIdx].focus();
-        scrollFocusedIntoView(rowItems[nextIdx]);
+        focusAndScrollIntoView(rowItems[nextIdx], true);
         return true;
       }
       // Stay cleanly at row edges on horizontal press inside a locked row
@@ -120,15 +155,17 @@ export function moveTvFocus(direction: 'ArrowUp' | 'ArrowDown' | 'ArrowLeft' | '
   if (currentRow && !playerMenu && (direction === 'ArrowUp' || direction === 'ArrowDown')) {
     const playerRoot = currentRow.closest('[data-tv-player="true"]') as HTMLElement | null;
     if (playerRoot) {
-      const rows = Array.from(playerRoot.querySelectorAll<HTMLElement>('[data-tv-row]'))
-        .filter((row) => getVisibleFocusables(row).length > 0)
-        .sort((a, b) => a.getBoundingClientRect().top - b.getBoundingClientRect().top);
-      const rowIdx = rows.indexOf(currentRow);
+      const rowsWithRect = Array.from(playerRoot.querySelectorAll<HTMLElement>('[data-tv-row]'))
+        .map((row) => ({ row, items: getVisibleFocusables(row, isVisible), top: row.getBoundingClientRect().top }))
+        .filter((entry) => entry.items.length > 0)
+        .sort((a, b) => a.top - b.top);
+      const rowIdx = rowsWithRect.findIndex((r) => r.row === currentRow);
       if (rowIdx !== -1) {
         const targetRowIdx = direction === 'ArrowDown' ? rowIdx + 1 : rowIdx - 1;
-        if (targetRowIdx >= 0 && targetRowIdx < rows.length) {
-          const targetItems = getVisibleFocusables(rows[targetRowIdx]);
-          const activeCenterX = active.getBoundingClientRect().left + active.getBoundingClientRect().width / 2;
+        if (targetRowIdx >= 0 && targetRowIdx < rowsWithRect.length) {
+          const targetItems = rowsWithRect[targetRowIdx].items;
+          const activeRect = active!.getBoundingClientRect();
+          const activeCenterX = activeRect.left + activeRect.width / 2;
           let closest = targetItems[0];
           let minDx = Infinity;
           for (const item of targetItems) {
@@ -139,8 +176,7 @@ export function moveTvFocus(direction: 'ArrowUp' | 'ArrowDown' | 'ArrowLeft' | '
               closest = item;
             }
           }
-          closest.focus();
-          scrollFocusedIntoView(closest);
+          focusAndScrollIntoView(closest);
           return true;
         }
         return true;
@@ -148,8 +184,25 @@ export function moveTvFocus(direction: 'ArrowUp' | 'ArrowDown' | 'ArrowLeft' | '
     }
   }
 
-  const candidates = allVisible.filter((el) => el !== active);
-  if (candidates.length === 0) return false;
+  const activeOverlay = active?.closest('[data-tv-scope="modal"]') as HTMLElement | null;
+  const root: ParentNode = playerMenu || activeOverlay || openModal || document;
+
+  const allVisible = getVisibleFocusables(root, isVisible);
+  if (allVisible.length === 0) return false;
+
+  if (
+    !active ||
+    !isVisible(active) ||
+    active === document.body ||
+    !activeInModalScope ||
+    (playerMenu && !playerMenu.contains(active))
+  ) {
+    const preferred =
+      (root.querySelector('[data-tv-default-focus="true"]') as HTMLElement | null) || allVisible[0];
+    const target = preferred && isVisible(preferred) ? preferred : allVisible[0];
+    focusAndScrollIntoView(target);
+    return true;
+  }
 
   const from = active.getBoundingClientRect();
   const fromX = from.left + from.width / 2;
@@ -158,7 +211,10 @@ export function moveTvFocus(direction: 'ArrowUp' | 'ArrowDown' | 'ArrowLeft' | '
   let best: HTMLElement | null = null;
   let bestScore = Infinity;
 
-  for (const el of candidates) {
+  for (let i = 0; i < allVisible.length; i++) {
+    const el = allVisible[i];
+    if (el === active) continue;
+
     const rect = el.getBoundingClientRect();
     const toX = rect.left + rect.width / 2;
     const toY = rect.top + rect.height / 2;
@@ -184,8 +240,7 @@ export function moveTvFocus(direction: 'ArrowUp' | 'ArrowDown' | 'ArrowLeft' | '
   }
 
   if (best) {
-    best.focus();
-    scrollFocusedIntoView(best);
+    focusAndScrollIntoView(best);
     return true;
   }
   return false;

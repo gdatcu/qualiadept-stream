@@ -144,9 +144,9 @@ export const LoginScreen: React.FC<LoginScreenProps> = ({
 
   return (
     <div className="relative min-h-screen w-full flex items-center justify-center overflow-hidden bg-obsidian px-4 pt-[max(1.5rem,var(--app-safe-top))] pb-[max(1.5rem,var(--app-safe-bottom))]">
-      {/* Ambient HBO Max style glowing gradients */}
-      <div className="pointer-events-none absolute -top-40 -left-40 h-[520px] w-[520px] rounded-full bg-violet-700/25 blur-[140px]" />
-      <div className="pointer-events-none absolute -bottom-40 -right-40 h-[520px] w-[520px] rounded-full bg-indigo-600/20 blur-[140px]" />
+      {/* Ambient HBO Max style glowing gradients (hidden on Tizen TV to keep GPU responsive) */}
+      <div className="tv-ambient-glow pointer-events-none absolute -top-40 -left-40 h-[520px] w-[520px] rounded-full bg-violet-700/25 blur-[140px]" />
+      <div className="tv-ambient-glow pointer-events-none absolute -bottom-40 -right-40 h-[520px] w-[520px] rounded-full bg-indigo-600/20 blur-[140px]" />
 
       <div className="relative z-10 w-full max-w-xl animate-fade-in">
         {onCancel && (

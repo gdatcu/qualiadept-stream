@@ -662,20 +662,31 @@ export const App: React.FC = () => {
     activeTab,
   ]);
 
+  const isTv = isTizenTv();
+
+  const recentlyAddedItems = useMemo(
+    () => (isTv ? filteredItems.slice(0, 18) : filteredItems.slice(0, 30)),
+    [filteredItems, isTv]
+  );
+
   const genreRows = useMemo(() => {
+    const maxPerRow = isTv ? 16 : 24;
+    const maxRows = isTv ? 6 : 8;
     const map = new Map<string, MediaItem[]>();
     for (const item of filteredItems) {
       for (const genre of item.genres) {
         if (genre === 'Featured') continue;
         const list = map.get(genre) || [];
-        list.push(item);
+        if (list.length < maxPerRow) {
+          list.push(item);
+        }
         map.set(genre, list);
       }
     }
     return [...map.entries()]
       .sort((a, b) => b[1].length - a[1].length)
-      .slice(0, 8);
-  }, [filteredItems]);
+      .slice(0, maxRows);
+  }, [filteredItems, isTv]);
 
   const heroItem = useMemo(() => {
     if (tabBaseItems.length === 0) return null;
@@ -986,6 +997,7 @@ export const App: React.FC = () => {
                             src={item.posterUrl}
                             alt={item.name}
                             loading="lazy"
+                            decoding="async"
                             className="h-full w-full object-cover"
                           />
                         )}
@@ -1018,7 +1030,7 @@ export const App: React.FC = () => {
               <>
                 <MediaRow
                   title="Recently Added"
-                  items={filteredItems}
+                  items={recentlyAddedItems}
                   onSelect={setSelectedItem}
                   onPlay={(item) =>
                     item.type === 'Series' || item.type === 'BoxSet'

@@ -28,13 +28,32 @@
     outline-offset: 2px;
   }
 
-  /* 10-foot living-room Smart TV UI scaling & Apple TV / Disney+ style focus elevation */
+  /* 10-foot living-room Smart TV UI scaling & GPU-friendly instant focus elevation */
   html.tizen-tv {
     font-size: 20px;
+    scroll-behavior: auto !important;
   }
 
   html.tizen-tv body {
-    background: radial-gradient(circle at 18% 0%, rgba(109, 40, 217, 0.22), transparent 45%), #06070d;
+    background: #06070d;
+  }
+
+  /* Samsung Tizen WebView slows to 5 FPS with multiple backdrop-filter layers; use solid/translucent fills instead */
+  html.tizen-tv * {
+    backdrop-filter: none !important;
+    -webkit-backdrop-filter: none !important;
+  }
+
+  html.tizen-tv .tv-ambient-glow {
+    display: none !important;
+  }
+
+  html.tizen-tv .tv-row-section {
+    contain: layout style;
+  }
+
+  html.tizen-tv .animate-fade-in {
+    animation: none !important;
   }
 
   html.tizen-tv button:focus,
@@ -43,18 +62,22 @@
   html.tizen-tv select:focus,
   html.tizen-tv [tabindex]:focus {
     outline: 4px solid #ffffff !important;
-    outline-offset: 3px !important;
-    box-shadow:
-      0 0 0 8px rgba(139, 92, 246, 0.65),
-      0 14px 36px rgba(0, 0, 0, 0.75) !important;
+    outline-offset: 2px !important;
+    box-shadow: 0 0 0 6px rgba(139, 92, 246, 0.7) !important;
     position: relative;
     z-index: 25;
-    transition: transform 180ms cubic-bezier(0.22, 1, 0.36, 1), box-shadow 180ms ease;
+    transition: none !important;
+  }
+
+  html.tizen-tv [data-tv-card="true"] {
+    transition: transform 80ms ease-out !important;
+    box-shadow: none !important;
+    will-change: auto;
   }
 
   html.tizen-tv [data-tv-card="true"]:focus {
-    transform: scale(1.06) !important;
-    border-color: rgba(255, 255, 255, 0.9) !important;
+    transform: scale(1.04) !important;
+    border-color: rgba(255, 255, 255, 0.95) !important;
   }
 }
 

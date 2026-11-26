@@ -14,7 +14,7 @@ interface MediaRowProps {
   onRemoveContinueWatching?: (item: MediaItem) => void;
 }
 
-export const MediaRow: React.FC<MediaRowProps> = ({
+export const MediaRow: React.FC<MediaRowProps> = React.memo(({
   title,
   items,
   showProgress = false,
@@ -39,7 +39,7 @@ export const MediaRow: React.FC<MediaRowProps> = ({
   };
 
   return (
-    <section className={`relative group/row ${isTv ? 'mb-8' : 'mb-10'}`}>
+    <section className={`tv-row-section relative group/row ${isTv ? 'mb-8' : 'mb-10'}`}>
       <div className="mb-1.5 flex items-center justify-between px-4 sm:px-8">
         <h2
           className={`font-extrabold tracking-tight text-white ${
@@ -91,14 +91,14 @@ export const MediaRow: React.FC<MediaRowProps> = ({
                   onSelect(item);
                 }
               }}
-              className={`group/card relative flex-shrink-0 cursor-pointer overflow-hidden border border-white/10 bg-surface transition-all duration-300 hover:scale-[1.04] hover:border-violet-400/50 hover:shadow-xl hover:shadow-violet-900/20 focus:outline-none focus:scale-[1.05] focus:ring-4 focus:ring-violet-400 focus:border-violet-400 ${
+              className={`group/card relative flex-shrink-0 cursor-pointer overflow-hidden border border-white/10 bg-surface focus:outline-none ${
                 isTv
                   ? isLandscape
-                    ? 'w-72 rounded-2xl shadow-xl'
-                    : 'w-44 rounded-2xl shadow-xl'
-                  : isLandscape
-                  ? 'w-64 sm:w-72 rounded-xl'
-                  : 'w-40 sm:w-48 rounded-xl'
+                    ? 'w-72 rounded-2xl'
+                    : 'w-44 rounded-2xl'
+                  : `transition-all duration-300 hover:scale-[1.04] hover:border-violet-400/50 hover:shadow-xl hover:shadow-violet-900/20 focus:scale-[1.05] focus:ring-4 focus:ring-violet-400 focus:border-violet-400 ${
+                      isLandscape ? 'w-64 sm:w-72 rounded-xl' : 'w-40 sm:w-48 rounded-xl'
+                    }`
               }`}
             >
               <div
@@ -111,10 +111,15 @@ export const MediaRow: React.FC<MediaRowProps> = ({
                     src={thumbSrc}
                     alt={item.name}
                     loading="lazy"
+                    decoding="async"
                     onError={(e) => {
                       e.currentTarget.style.display = 'none';
                     }}
-                    className="h-full w-full object-cover transition duration-500 group-hover/card:scale-105"
+                    className={
+                      isTv
+                        ? 'h-full w-full object-cover'
+                        : 'h-full w-full object-cover transition duration-500 group-hover/card:scale-105'
+                    }
                   />
                 ) : (
                   <div className="flex h-full w-full items-center justify-center p-4 text-center">
@@ -268,4 +273,4 @@ export const MediaRow: React.FC<MediaRowProps> = ({
       </div>
     </section>
   );
-};
+});

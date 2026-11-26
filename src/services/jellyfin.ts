@@ -426,17 +426,24 @@ function mapJellyfinItem(raw: RawJellyfinItem, session: AuthSession): MediaItem 
     raw.ParentBackdropItemId && raw.ParentBackdropImageTags?.length
   );
 
+  const onTv = typeof window !== 'undefined' && (Boolean((window as unknown as { tizen?: unknown }).tizen) || /Tizen/i.test(navigator.userAgent));
+  const posterW = onTv ? 280 : 400;
+  const posterH = onTv ? 420 : 600;
+  const posterQ = onTv ? 78 : 90;
+  const backdropW = onTv ? 1280 : 1920;
+  const backdropQ = onTv ? 78 : 88;
+
   const posterUrl = hasPrimary
-    ? `${base}/Items/${raw.Id}/Images/Primary?fillHeight=600&fillWidth=400&quality=90&api_key=${token}`
+    ? `${base}/Items/${raw.Id}/Images/Primary?fillHeight=${posterH}&fillWidth=${posterW}&quality=${posterQ}&api_key=${token}`
     : hasBackdrop
-    ? `${base}/Items/${raw.Id}/Images/Backdrop/0?fillHeight=600&fillWidth=400&quality=85&api_key=${token}`
+    ? `${base}/Items/${raw.Id}/Images/Backdrop/0?fillHeight=${posterH}&fillWidth=${posterW}&quality=${posterQ}&api_key=${token}`
     : '';
 
   let backdropUrl = posterUrl;
   if (hasBackdrop) {
-    backdropUrl = `${base}/Items/${raw.Id}/Images/Backdrop/0?maxWidth=1920&quality=88&api_key=${token}`;
+    backdropUrl = `${base}/Items/${raw.Id}/Images/Backdrop/0?maxWidth=${backdropW}&quality=${backdropQ}&api_key=${token}`;
   } else if (hasParentBackdrop) {
-    backdropUrl = `${base}/Items/${raw.ParentBackdropItemId}/Images/Backdrop/0?maxWidth=1920&quality=88&api_key=${token}`;
+    backdropUrl = `${base}/Items/${raw.ParentBackdropItemId}/Images/Backdrop/0?maxWidth=${backdropW}&quality=${backdropQ}&api_key=${token}`;
   }
 
   const runtimeMinutes = raw.RunTimeTicks
