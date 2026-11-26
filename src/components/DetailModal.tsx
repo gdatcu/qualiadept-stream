@@ -354,6 +354,23 @@ export const DetailModal: React.FC<DetailModalProps> = ({
   const primaryActiveDl = item.type !== 'Series' ? getActiveDownload(item.id) : null;
   const canStoreInApp = supportsInAppOfflineStorage();
 
+  const selectedSeason = seasons.find((s) => s.id === selectedSeasonId) || seasons[0] || null;
+  const firstEpisode = episodes[0] || null;
+  const formatEpisodeCode = (seasonNum?: number, epNum?: number): string | null => {
+    if (epNum == null) return null;
+    if (seasonNum != null) return `S${seasonNum}E${String(epNum).padStart(2, '0')}`;
+    return `E${String(epNum).padStart(2, '0')}`;
+  };
+  const firstEpCode = formatEpisodeCode(
+    firstEpisode?.seasonNumber ?? selectedSeason?.seasonNumber,
+    firstEpisode?.episodeNumber
+  );
+  const seriesPlayLabel = firstEpisode?.resumePositionSeconds
+    ? `Resume ${firstEpCode || 'Episode'}`
+    : firstEpCode
+    ? `Play ${firstEpCode}`
+    : 'Play';
+
   const runtimeLabel = formatRuntimeHours(item.runtimeMinutes);
   const endsAtLabel = formatEndsAt(item.runtimeMinutes, item.resumePositionSeconds);
   const isPlayed = item.isPlayed ?? details?.isPlayed ?? false;
@@ -430,9 +447,16 @@ export const DetailModal: React.FC<DetailModalProps> = ({
                   {item.name}
                 </h2>
 
-                {/* Metadata Strip (Year · Runtime · Rating · Score · Ends at HH:MM) */}
+                {/* Metadata Strip (Year · Season · Runtime · Rating · Score · Ends at HH:MM) */}
                 <div className="mt-2.5 flex flex-wrap items-center gap-x-3 gap-y-1.5 text-xs sm:text-sm font-semibold text-zinc-200">
                   {item.year && <span>{item.year}</span>}
+                  {item.type === 'Series' && seasons.length > 0 && (
+                    <span className="rounded-md border border-violet-400/30 bg-violet-500/15 px-2 py-0.5 text-[11px] font-bold text-violet-200">
+                      {seasons.length === 1
+                        ? selectedSeason?.name || `Season ${selectedSeason?.seasonNumber ?? 1}`
+                        : `${seasons.length} Seasons`}
+                    </span>
+                  )}
                   {runtimeLabel && <span className="text-zinc-300">{runtimeLabel}</span>}
                   {item.officialRating && (
                     <span className="rounded-md border border-white/25 bg-white/10 px-2 py-0.5 text-[11px] font-bold tracking-wide text-white">
@@ -471,7 +495,7 @@ export const DetailModal: React.FC<DetailModalProps> = ({
                     {primaryOfflineRec
                       ? 'Play Offline'
                       : item.type === 'Series'
-                      ? 'Play Episode 1'
+                      ? seriesPlayLabel
                       : item.resumePositionSeconds
                       ? 'Resume'
                       : 'Play'}
@@ -847,8 +871,15 @@ export const DetailModal: React.FC<DetailModalProps> = ({
           {/* Episodes list for Series */}
           {item.type === 'Series' && (
             <div className="border-t border-white/10 pt-5">
-              <div className="mb-4 flex items-center justify-between">
-                <h3 className="text-base font-bold text-white">Episodes</h3>
+              <div className="mb-4 flex items-center justify-between gap-3">
+                <div className="flex items-center gap-2.5">
+                  <h3 className="text-base font-bold text-white">Episodes</h3>
+                  {seasons.length === 1 && selectedSeason && (
+                    <span className="rounded-lg border border-violet-400/30 bg-violet-500/15 px-2.5 py-0.5 text-xs font-bold text-violet-200">
+                      {selectedSeason.name}
+                    </span>
+                  )}
+                </div>
                 {seasons.length > 1 && (
                   <select
                     value={selectedSeasonId}
@@ -871,6 +902,10 @@ export const DetailModal: React.FC<DetailModalProps> = ({
                   {episodes.map((ep) => {
                     const epOffline = getOfflineRecord(ep.id);
                     const epActive = getActiveDownload(ep.id);
+                    const epCode = formatEpisodeCode(
+                      ep.seasonNumber ?? selectedSeason?.seasonNumber,
+                      ep.episodeNumber
+                    );
                     return (
                       <div
                         key={ep.id}
@@ -902,9 +937,13 @@ export const DetailModal: React.FC<DetailModalProps> = ({
                         </div>
                         <div className="min-w-0 flex-1">
                           <div className="flex items-center justify-between gap-2">
-                            <h4 className="truncate text-sm font-semibold text-white">
-                              {ep.episodeNumber ? `${ep.episodeNumber}. ` : ''}
-                              {ep.name}
+                            <h4 className="flex min-w-0 items-center gap-2 text-sm font-semibold text-white">
+                              {epCode && (
+                                <span className="flex-shrink-0 rounded bg-white/10 px-1.5 py-0.5 font-mono text-[11px] font-bold text-violet-300">
+                                  {epCode}
+                                </span>
+                              )}
+                              <span className="truncate">{ep.name}</span>
                             </h4>
                             {ep.runtimeMinutes && (
                               <span className="text-xs text-zinc-400 flex-shrink-0">
