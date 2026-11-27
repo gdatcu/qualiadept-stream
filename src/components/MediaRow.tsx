@@ -39,11 +39,15 @@ export const MediaRow: React.FC<MediaRowProps> = React.memo(({
   };
 
   return (
-    <section className={`tv-row-section relative group/row ${isTv ? 'mb-8' : 'mb-10'}`}>
-      <div className="mb-1.5 flex items-center justify-between px-4 sm:px-8">
+    <section className={`tv-row-section relative group/row ${isTv ? 'mb-7' : 'mb-10'}`}>
+      <div
+        className={`flex items-center justify-between ${
+          isTv ? 'mb-1 px-[3.8vw]' : 'mb-1.5 px-4 sm:px-8'
+        }`}
+      >
         <h2
-          className={`font-extrabold tracking-tight text-white ${
-            isTv ? 'text-xl' : 'text-lg sm:text-xl font-bold'
+          className={`tracking-tight text-white ${
+            isTv ? 'text-[1.35rem] font-extrabold' : 'text-lg sm:text-xl font-bold'
           }`}
         >
           {title}
@@ -71,8 +75,8 @@ export const MediaRow: React.FC<MediaRowProps> = React.memo(({
       <div
         ref={rowRef}
         data-tv-row="media-row"
-        className={`no-scrollbar flex overflow-x-auto px-4 sm:px-8 ${
-          isTv ? 'gap-5 py-4' : 'gap-4 py-2'
+        className={`no-scrollbar flex overflow-x-auto ${
+          isTv ? 'gap-6 px-[3.8vw] py-4' : 'gap-4 px-4 sm:px-8 py-2'
         }`}
       >
         {items.map((item) => {
@@ -91,20 +95,20 @@ export const MediaRow: React.FC<MediaRowProps> = React.memo(({
                   onSelect(item);
                 }
               }}
-              className={`group/card relative flex-shrink-0 cursor-pointer overflow-hidden border border-white/10 bg-surface focus:outline-none ${
+              className={`group/card relative flex-shrink-0 cursor-pointer focus:outline-none ${
                 isTv
                   ? isLandscape
-                    ? 'w-72 rounded-2xl'
-                    : 'w-44 rounded-2xl'
-                  : `transition-all duration-300 hover:scale-[1.04] hover:border-violet-400/50 hover:shadow-xl hover:shadow-violet-900/20 focus:scale-[1.05] focus:ring-4 focus:ring-violet-400 focus:border-violet-400 ${
+                    ? 'w-[17.5rem]'
+                    : 'w-[10.5rem]'
+                  : `overflow-hidden border border-white/10 bg-surface transition-all duration-300 hover:scale-[1.04] hover:border-violet-400/50 hover:shadow-xl hover:shadow-violet-900/20 focus:scale-[1.05] focus:ring-4 focus:ring-violet-400 focus:border-violet-400 ${
                       isLandscape ? 'w-64 sm:w-72 rounded-xl' : 'w-40 sm:w-48 rounded-xl'
                     }`
               }`}
             >
               <div
-                className={`relative w-full overflow-hidden bg-gradient-to-br from-violet-950/70 via-surface-elevated to-obsidian ${
+                className={`tv-card-frame relative w-full overflow-hidden bg-gradient-to-br from-[#161a2e] via-surface-elevated to-obsidian ${
                   isLandscape ? 'aspect-video' : 'aspect-[2/3]'
-                }`}
+                } ${isTv ? 'rounded-2xl border border-white/15' : ''}`}
               >
                 {thumbSrc ? (
                   <img
@@ -123,10 +127,15 @@ export const MediaRow: React.FC<MediaRowProps> = React.memo(({
                   />
                 ) : (
                   <div className="flex h-full w-full items-center justify-center p-4 text-center">
-                    <span className="text-sm font-bold text-zinc-400 line-clamp-3">
+                    <span className="text-sm font-bold text-zinc-300 line-clamp-3">
                       {item.name}
                     </span>
                   </div>
+                )}
+
+                {/* Subtle bottom gradient on landscape cards for episode badge & progress contrast */}
+                {isTv && isLandscape && (
+                  <div className="pointer-events-none absolute inset-x-0 bottom-0 h-16 bg-gradient-to-t from-black/85 via-black/35 to-transparent" />
                 )}
 
                 {/* Hover Play Overlay (desktop mouse only, skipped by TV D-pad via tabIndex=-1) */}
@@ -200,25 +209,50 @@ export const MediaRow: React.FC<MediaRowProps> = React.memo(({
                   </div>
                 )}
 
-                {/* Watched indicator (always visible when watched and not hovering) */}
+                {/* Watched indicator */}
                 {item.isPlayed && !showProgress && (
-                  <div className="pointer-events-none absolute top-2 left-2 flex h-6 w-6 items-center justify-center rounded-full bg-emerald-500/90 text-white shadow group-hover/card:opacity-0 transition">
-                    <Check className="h-3.5 w-3.5" />
+                  <div
+                    className={`pointer-events-none absolute top-2.5 left-2.5 flex items-center justify-center rounded-full bg-emerald-500 text-white shadow-lg ${
+                      isTv
+                        ? 'h-7 w-7'
+                        : 'h-6 w-6 group-hover/card:opacity-0 transition'
+                    }`}
+                  >
+                    <Check className={isTv ? 'h-4 w-4 stroke-[3]' : 'h-3.5 w-3.5'} />
                   </div>
                 )}
 
                 {/* Rating badge */}
                 {item.rating && !isLandscape && (
-                  <div className="absolute top-2 right-2 flex items-center gap-1 rounded-lg bg-obsidian/85 px-2 py-0.5 text-[11px] font-bold text-amber-300 backdrop-blur-md">
-                    <Star className="h-3 w-3 fill-amber-300" />
+                  <div
+                    className={`absolute top-2.5 right-2.5 flex items-center gap-1 rounded-lg font-extrabold text-amber-300 ${
+                      isTv
+                        ? 'bg-black/85 border border-white/10 px-2 py-0.5 text-xs'
+                        : 'bg-obsidian/85 px-2 py-0.5 text-[11px] font-bold backdrop-blur-md'
+                    }`}
+                  >
+                    <Star className={isTv ? 'h-3.5 w-3.5 fill-amber-300' : 'h-3 w-3 fill-amber-300'} />
                     {item.rating}
+                  </div>
+                )}
+
+                {/* Episode badge inside landscape frame on TV */}
+                {isTv && item.type === 'Episode' && item.seasonNumber != null && item.episodeNumber != null && (
+                  <div className="pointer-events-none absolute bottom-3 left-3 rounded-md bg-black/85 border border-white/15 px-2 py-0.5 text-xs font-extrabold tracking-wide text-white">
+                    S{String(item.seasonNumber).padStart(2, '0')} · E{String(item.episodeNumber).padStart(2, '0')}
                   </div>
                 )}
 
                 {/* Collection / BoxSet badge */}
                 {item.type === 'BoxSet' && (
-                  <div className="absolute bottom-2 left-2 flex items-center gap-1 rounded-md bg-violet-600/90 px-2 py-0.5 text-[10px] font-extrabold uppercase tracking-wide text-white shadow">
-                    <Layers className="h-3 w-3" />
+                  <div
+                    className={`absolute bottom-2.5 left-2.5 flex items-center gap-1 rounded-md font-extrabold uppercase tracking-wide text-white shadow ${
+                      isTv
+                        ? 'bg-[#121626]/95 border border-white/20 px-2.5 py-1 text-xs'
+                        : 'bg-violet-600/90 px-2 py-0.5 text-[10px]'
+                    }`}
+                  >
+                    <Layers className={isTv ? 'h-3.5 w-3.5' : 'h-3 w-3'} />
                     Collection
                   </div>
                 )}
@@ -226,26 +260,38 @@ export const MediaRow: React.FC<MediaRowProps> = React.memo(({
                 {/* Continue Watching progress bar */}
                 {showProgress && (item.playedPercentage ?? 0) > 0 && (
                   <div
-                    className={`absolute bottom-0 left-0 right-0 bg-white/25 ${
-                      isTv ? 'h-1.5' : 'h-1'
+                    className={`absolute bottom-0 left-0 right-0 bg-white/30 ${
+                      isTv ? 'h-2' : 'h-1'
                     }`}
                   >
                     <div
-                      className="h-full bg-gradient-to-r from-violet-400 to-fuchsia-400"
+                      className="h-full bg-white"
                       style={{ width: `${Math.min(100, item.playedPercentage || 0)}%` }}
                     />
                   </div>
                 )}
               </div>
 
-              <div className={isTv ? 'p-3.5' : 'p-3'}>
-                <h3 className="truncate text-sm font-bold text-white">
+              <div className={isTv ? 'pt-2.5 px-0.5' : 'p-3'}>
+                <h3
+                  className={
+                    isTv
+                      ? 'tv-card-title truncate text-[0.92rem] font-bold text-zinc-200 transition-colors'
+                      : 'truncate text-sm font-bold text-white'
+                  }
+                >
                   {item.type === 'Episode' && item.seriesName ? item.seriesName : item.name}
                 </h3>
-                <div className="mt-1 flex items-center gap-2 text-xs text-zinc-400">
+                <div
+                  className={
+                    isTv
+                      ? 'mt-0.5 flex items-center gap-2 text-[0.78rem] font-medium text-zinc-400'
+                      : 'mt-1 flex items-center gap-2 text-xs text-zinc-400'
+                  }
+                >
                   {item.type === 'Episode' && (
-                    <span className="truncate text-violet-300 font-semibold">
-                      {item.seasonNumber && item.episodeNumber
+                    <span className="truncate text-zinc-300 font-semibold">
+                      {!isTv && item.seasonNumber && item.episodeNumber
                         ? `S${item.seasonNumber} · E${item.episodeNumber} · `
                         : ''}
                       {item.name}
@@ -253,16 +299,26 @@ export const MediaRow: React.FC<MediaRowProps> = React.memo(({
                   )}
                   {item.type !== 'Episode' && item.year && <span>{item.year}</span>}
                   {item.type === 'Series' && (
-                    <span className="rounded-md bg-white/10 px-1.5 py-0.5 text-[10px] font-bold text-zinc-200">
-                      SERIES
+                    <span
+                      className={
+                        isTv
+                          ? 'rounded bg-white/10 px-1.5 py-0.5 text-[0.68rem] font-bold uppercase tracking-wider text-zinc-300'
+                          : 'rounded-md bg-white/10 px-1.5 py-0.5 text-[10px] font-bold text-zinc-200'
+                      }
+                    >
+                      Series
                     </span>
                   )}
                   {item.runtimeMinutes && !isLandscape && (
-                    <span>{item.runtimeMinutes}m</span>
+                    <span>
+                      {Math.floor(item.runtimeMinutes / 60) > 0
+                        ? `${Math.floor(item.runtimeMinutes / 60)}h ${item.runtimeMinutes % 60}m`
+                        : `${item.runtimeMinutes}m`}
+                    </span>
                   )}
                   {showProgress && item.playedPercentage && (
-                    <span className="font-semibold text-violet-300">
-                      {Math.round(item.playedPercentage)}% watched
+                    <span className="font-semibold text-zinc-300">
+                      {Math.round(item.playedPercentage)}%
                     </span>
                   )}
                 </div>

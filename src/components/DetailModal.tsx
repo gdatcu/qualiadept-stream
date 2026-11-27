@@ -388,43 +388,80 @@ export const DetailModal: React.FC<DetailModalProps> = ({
       ref={scrollContainerRef}
       data-tv-scope="modal"
       onClick={onClose}
-      className="fixed inset-0 z-50 flex items-start justify-center overflow-y-auto bg-black/85 px-3 py-4 pt-[max(1rem,var(--app-safe-top))] pb-[max(1.5rem,var(--app-safe-bottom))] backdrop-blur-md sm:px-6 sm:py-8"
+      className={
+        isTv
+          ? 'fixed inset-0 z-50 flex items-start justify-center overflow-y-auto bg-black/90 px-[4vw] py-8'
+          : 'fixed inset-0 z-50 flex items-start justify-center overflow-y-auto bg-black/85 px-3 py-4 pt-[max(1rem,var(--app-safe-top))] pb-[max(1.5rem,var(--app-safe-bottom))] backdrop-blur-md sm:px-6 sm:py-8'
+      }
     >
       <div
         onClick={(e) => e.stopPropagation()}
-        className="relative my-auto w-full max-w-5xl overflow-hidden rounded-3xl border border-white/15 bg-surface shadow-[0_24px_90px_rgba(0,0,0,0.85)] animate-fade-in"
+        className={`relative my-auto w-full overflow-hidden rounded-3xl border border-white/15 shadow-[0_24px_90px_rgba(0,0,0,0.9)] animate-fade-in ${
+          isTv ? 'max-w-[90vw] bg-[#0b0e18]' : 'max-w-5xl bg-surface'
+        }`}
       >
         {/* Close Button */}
         <button
+          data-tv-pill={isTv ? 'true' : undefined}
           onClick={onClose}
           aria-label="Close"
-          className="absolute top-4 right-4 z-30 flex h-10 w-10 items-center justify-center rounded-full border border-white/15 bg-obsidian/80 text-white backdrop-blur-md transition hover:bg-white/20"
+          className={
+            isTv
+              ? 'absolute top-5 right-5 z-30 flex h-12 w-12 items-center justify-center rounded-full border border-white/25 bg-[#121626]/95 text-white shadow-xl'
+              : 'absolute top-4 right-4 z-30 flex h-10 w-10 items-center justify-center rounded-full border border-white/15 bg-obsidian/80 text-white backdrop-blur-md transition hover:bg-white/20'
+          }
         >
-          <X className="h-5 w-5" />
+          <X className={isTv ? 'h-6 w-6' : 'h-5 w-5'} />
         </button>
 
         {/* Cinematic Backdrop + Floating Poster Header */}
-        <div className="relative overflow-hidden bg-gradient-to-br from-violet-950/80 via-surface-elevated to-obsidian">
+        <div className="relative overflow-hidden bg-gradient-to-br from-[#14182b] via-surface-elevated to-obsidian">
           {/* Backdrop image */}
-          <div className="relative h-56 sm:h-80 w-full overflow-hidden">
+          <div
+            className={`relative w-full overflow-hidden ${
+              isTv ? 'h-[44vh] min-h-[320px]' : 'h-56 sm:h-80'
+            }`}
+          >
             {item.backdropUrl && !imgFailed && (
               <img
                 src={item.backdropUrl}
                 alt={item.name}
                 onError={() => setImgFailed(true)}
-                className="h-full w-full object-cover object-center scale-[1.01]"
+                className="h-full w-full object-cover object-center"
               />
             )}
-            <div className="absolute inset-0 bg-gradient-to-t from-surface via-surface/65 to-black/25" />
-            <div className="absolute inset-0 bg-gradient-to-r from-surface/90 via-surface/35 to-transparent" />
+            <div
+              className={
+                isTv
+                  ? 'absolute inset-0 bg-gradient-to-t from-[#0b0e18] via-[#0b0e18]/65 to-black/20'
+                  : 'absolute inset-0 bg-gradient-to-t from-surface via-surface/65 to-black/25'
+              }
+            />
+            <div
+              className={
+                isTv
+                  ? 'absolute inset-0 bg-gradient-to-r from-[#0b0e18]/95 via-[#0b0e18]/45 to-transparent'
+                  : 'absolute inset-0 bg-gradient-to-r from-surface/90 via-surface/35 to-transparent'
+              }
+            />
           </div>
 
           {/* Floating Poster + Title + Metadata + Action Bar */}
-          <div className="relative z-10 -mt-28 sm:-mt-40 px-5 pb-5 sm:px-8 sm:pb-6">
-            <div className="flex flex-col gap-5 sm:flex-row sm:items-end">
+          <div
+            className={
+              isTv
+                ? 'relative z-10 -mt-44 px-10 pb-7'
+                : 'relative z-10 -mt-28 sm:-mt-40 px-5 pb-5 sm:px-8 sm:pb-6'
+            }
+          >
+            <div className={`flex flex-col sm:flex-row sm:items-end ${isTv ? 'gap-7' : 'gap-5'}`}>
               {/* Vertical Poster Card */}
               {item.posterUrl && !posterFailed && (
-                <div className="hidden sm:block w-36 md:w-44 flex-shrink-0 overflow-hidden rounded-2xl border border-white/20 bg-obsidian shadow-[0_18px_45px_rgba(0,0,0,0.75)]">
+                <div
+                  className={`hidden sm:block flex-shrink-0 overflow-hidden rounded-2xl border border-white/20 bg-obsidian shadow-[0_18px_45px_rgba(0,0,0,0.85)] ${
+                    isTv ? 'w-48' : 'w-36 md:w-44'
+                  }`}
+                >
                   <img
                     src={item.posterUrl}
                     alt={item.name}
@@ -436,119 +473,172 @@ export const DetailModal: React.FC<DetailModalProps> = ({
 
               {/* Title, Metadata Row & Actions */}
               <div className="min-w-0 flex-1">
-                <h2 className="text-2xl sm:text-4xl font-black tracking-tight text-white drop-shadow-md">
+                <h2
+                  className={
+                    isTv
+                      ? 'text-4xl font-black tracking-tight text-white drop-shadow-lg'
+                      : 'text-2xl sm:text-4xl font-black tracking-tight text-white drop-shadow-md'
+                  }
+                >
                   {item.name}
                 </h2>
 
                 {/* Metadata Strip (Year · Season · Runtime · Rating · Score · Ends at HH:MM) */}
-                <div className="mt-2.5 flex flex-wrap items-center gap-x-3 gap-y-1.5 text-xs sm:text-sm font-semibold text-zinc-200">
+                <div
+                  className={`mt-3 flex flex-wrap items-center gap-x-3.5 gap-y-2 font-semibold text-zinc-200 ${
+                    isTv ? 'text-sm' : 'text-xs sm:text-sm'
+                  }`}
+                >
                   {item.year && <span>{item.year}</span>}
                   {item.type === 'Series' && seasons.length > 0 && (
-                    <span className="rounded-md border border-violet-400/30 bg-violet-500/15 px-2 py-0.5 text-[11px] font-bold text-violet-200">
+                    <span className="rounded-md border border-white/25 bg-[#15192b] px-2.5 py-0.5 text-xs font-bold text-white">
                       {seasons.length === 1
                         ? selectedSeason?.name || `Season ${selectedSeason?.seasonNumber ?? 1}`
                         : `${seasons.length} Seasons`}
                     </span>
                   )}
-                  {runtimeLabel && <span className="text-zinc-300">{runtimeLabel}</span>}
+                  {runtimeLabel && <span className="text-zinc-200">{runtimeLabel}</span>}
                   {item.officialRating && (
-                    <span className="rounded-md border border-white/25 bg-white/10 px-2 py-0.5 text-[11px] font-bold tracking-wide text-white">
+                    <span className="rounded-md border border-white/30 bg-white/10 px-2 py-0.5 text-xs font-bold tracking-wide text-white">
                       {item.officialRating}
                     </span>
                   )}
                   {item.rating && (
-                    <span className="flex items-center gap-1 text-amber-300">
-                      <Star className="h-3.5 w-3.5 fill-amber-300" />
+                    <span className="flex items-center gap-1 font-extrabold text-amber-300">
+                      <Star className={isTv ? 'h-4 w-4 fill-amber-300' : 'h-3.5 w-3.5 fill-amber-300'} />
                       {item.rating}
                     </span>
                   )}
                   {endsAtLabel && item.type !== 'Series' && (
-                    <span className="inline-flex items-center gap-1 rounded-full bg-violet-500/15 border border-violet-400/25 px-2.5 py-0.5 text-xs font-medium text-violet-200">
-                      <Clock className="h-3 w-3 text-violet-300" />
+                    <span className="inline-flex items-center gap-1.5 rounded-full border border-white/20 bg-[#15192b] px-3 py-0.5 text-xs font-semibold text-zinc-200">
+                      <Clock className="h-3.5 w-3.5 text-zinc-300" />
                       Ends at {endsAtLabel}
                     </span>
                   )}
                   {isPlayed && (
-                    <span className="inline-flex items-center gap-1 rounded-full bg-emerald-500/15 border border-emerald-400/30 px-2 py-0.5 text-[11px] font-bold text-emerald-300">
-                      <Check className="h-3 w-3" />
+                    <span className="inline-flex items-center gap-1 rounded-full bg-emerald-500/20 border border-emerald-400/35 px-2.5 py-0.5 text-xs font-bold text-emerald-300">
+                      <Check className="h-3.5 w-3.5" />
                       Watched
                     </span>
                   )}
                 </div>
 
                 {/* Primary & Secondary Action Bar */}
-                <div data-tv-row="detail-actions" className="mt-4 flex flex-wrap items-center gap-2.5">
+                <div
+                  data-tv-row="detail-actions"
+                  data-tv-modal-top="true"
+                  className={`flex flex-wrap items-center ${isTv ? 'mt-5 gap-3.5' : 'mt-4 gap-2.5'}`}
+                >
                   <button
                     ref={playBtnRef}
                     data-tv-default-focus="true"
+                    data-tv-pill={isTv ? 'true' : undefined}
                     onClick={() => handlePrimaryPlay(false)}
-                    className="flex items-center gap-2 rounded-full bg-white px-6 py-2.5 text-sm font-extrabold text-obsidian shadow-xl transition hover:bg-zinc-200 focus:outline-none focus:ring-4 focus:ring-violet-400"
+                    className={
+                      isTv
+                        ? 'flex items-center gap-2.5 rounded-full bg-white px-8 py-3.5 text-base font-extrabold text-obsidian shadow-2xl transition'
+                        : 'flex items-center gap-2 rounded-full bg-white px-6 py-2.5 text-sm font-extrabold text-obsidian shadow-xl transition hover:bg-zinc-200 focus:outline-none focus:ring-4 focus:ring-violet-400'
+                    }
                   >
-                    <Play className="h-4 w-4 fill-obsidian" />
-                    {primaryOfflineRec
-                      ? 'Play Offline'
-                      : item.type === 'Series'
-                      ? seriesPlayLabel
-                      : item.resumePositionSeconds
-                      ? 'Resume'
-                      : 'Play'}
+                    <Play className={isTv ? 'h-5 w-5 fill-obsidian' : 'h-4 w-4 fill-obsidian'} />
+                    <span>
+                      {primaryOfflineRec
+                        ? 'Play Offline'
+                        : item.type === 'Series'
+                        ? seriesPlayLabel
+                        : item.resumePositionSeconds
+                        ? 'Resume'
+                        : 'Play'}
+                    </span>
                   </button>
 
                   {/* Play from beginning (when resumable) */}
                   {item.type !== 'Series' && Boolean(item.resumePositionSeconds) && (
                     <button
+                      data-tv-pill={isTv ? 'true' : undefined}
                       onClick={() => handlePrimaryPlay(true)}
                       title="Play from beginning"
-                      className="flex items-center gap-1.5 rounded-full border border-white/20 bg-white/10 px-4 py-2.5 text-sm font-bold text-white backdrop-blur-md transition hover:bg-white/20 focus:outline-none focus:ring-4 focus:ring-violet-400"
+                      className={
+                        isTv
+                          ? 'flex items-center gap-2 rounded-full border border-white/25 bg-[#15192b] px-6 py-3.5 text-base font-bold text-white shadow-xl'
+                          : 'flex items-center gap-1.5 rounded-full border border-white/20 bg-white/10 px-4 py-2.5 text-sm font-bold text-white backdrop-blur-md transition hover:bg-white/20 focus:outline-none focus:ring-4 focus:ring-violet-400'
+                      }
                     >
-                      <RotateCcw className="h-4 w-4" />
-                      <span className="hidden sm:inline">Restart</span>
+                      <RotateCcw className={isTv ? 'h-5 w-5' : 'h-4 w-4'} />
+                      <span className={isTv ? 'inline' : 'hidden sm:inline'}>Restart</span>
                     </button>
                   )}
 
                   {/* Watch Trailer */}
                   {primaryTrailer && (
                     <button
+                      data-tv-pill={isTv ? 'true' : undefined}
                       onClick={() => setActiveTrailerUrl(primaryTrailer)}
                       title={`Watch ${primaryTrailer.name}`}
-                      className="flex items-center gap-1.5 rounded-full border border-white/20 bg-white/10 px-4 py-2.5 text-sm font-bold text-white backdrop-blur-md transition hover:bg-white/20 focus:outline-none focus:ring-4 focus:ring-violet-400"
+                      className={
+                        isTv
+                          ? 'flex items-center gap-2 rounded-full border border-white/25 bg-[#15192b] px-6 py-3.5 text-base font-bold text-white shadow-xl'
+                          : 'flex items-center gap-1.5 rounded-full border border-white/20 bg-white/10 px-4 py-2.5 text-sm font-bold text-white backdrop-blur-md transition hover:bg-white/20 focus:outline-none focus:ring-4 focus:ring-violet-400'
+                      }
                     >
-                      <Film className="h-4 w-4 text-violet-300" />
-                      Trailer
+                      <Film className={isTv ? 'h-5 w-5' : 'h-4 w-4 text-violet-300'} />
+                      <span>Trailer</span>
                     </button>
                   )}
 
                   {/* Mark Played / Unplayed */}
                   {onTogglePlayed && !session.isDemo && (
                     <button
+                      data-tv-pill={isTv ? 'true' : undefined}
                       onClick={() => onTogglePlayed(item)}
                       title={isPlayed ? 'Mark as unplayed' : 'Mark as played'}
-                      className={`flex items-center gap-1.5 rounded-full border px-4 py-2.5 text-sm font-bold backdrop-blur-md transition focus:outline-none focus:ring-4 focus:ring-violet-400 ${
-                        isPlayed
-                          ? 'border-emerald-400/40 bg-emerald-500/20 text-emerald-200 hover:bg-emerald-500/30'
-                          : 'border-white/20 bg-white/10 text-white hover:bg-white/20'
-                      }`}
+                      className={
+                        isTv
+                          ? `flex items-center gap-2 rounded-full border px-6 py-3.5 text-base font-bold shadow-xl ${
+                              isPlayed
+                                ? 'border-emerald-400/45 bg-emerald-500/20 text-emerald-200'
+                                : 'border-white/25 bg-[#15192b] text-white'
+                            }`
+                          : `flex items-center gap-1.5 rounded-full border px-4 py-2.5 text-sm font-bold backdrop-blur-md transition focus:outline-none focus:ring-4 focus:ring-violet-400 ${
+                              isPlayed
+                                ? 'border-emerald-400/40 bg-emerald-500/20 text-emerald-200 hover:bg-emerald-500/30'
+                                : 'border-white/20 bg-white/10 text-white hover:bg-white/20'
+                            }`
+                      }
                     >
-                      <Check className="h-4 w-4" />
-                      <span className="hidden md:inline">{isPlayed ? 'Played' : 'Mark Played'}</span>
+                      <Check className={isTv ? 'h-5 w-5' : 'h-4 w-4'} />
+                      <span className={isTv ? 'inline' : 'hidden md:inline'}>
+                        {isPlayed ? 'Played' : 'Mark Played'}
+                      </span>
                     </button>
                   )}
 
                   {/* Favorite Heart */}
                   <button
+                    data-tv-pill={isTv ? 'true' : undefined}
                     onClick={() => onToggleFavorite(item)}
                     title={item.isFavorite ? 'Remove from Favorites' : 'Add to Favorites'}
-                    className={`flex items-center gap-1.5 rounded-full border px-4 py-2.5 text-sm font-bold backdrop-blur-md transition focus:outline-none focus:ring-4 focus:ring-violet-400 ${
-                      item.isFavorite
-                        ? 'border-rose-400/40 bg-rose-500/20 text-rose-200 hover:bg-rose-500/30'
-                        : 'border-white/20 bg-white/10 text-white hover:bg-white/20'
-                    }`}
+                    className={
+                      isTv
+                        ? `flex items-center gap-2 rounded-full border px-6 py-3.5 text-base font-bold shadow-xl ${
+                            item.isFavorite
+                              ? 'border-rose-400/45 bg-rose-500/20 text-rose-200'
+                              : 'border-white/25 bg-[#15192b] text-white'
+                          }`
+                        : `flex items-center gap-1.5 rounded-full border px-4 py-2.5 text-sm font-bold backdrop-blur-md transition focus:outline-none focus:ring-4 focus:ring-violet-400 ${
+                            item.isFavorite
+                              ? 'border-rose-400/40 bg-rose-500/20 text-rose-200 hover:bg-rose-500/30'
+                              : 'border-white/20 bg-white/10 text-white hover:bg-white/20'
+                          }`
+                    }
                   >
                     <Heart
-                      className={`h-4 w-4 ${item.isFavorite ? 'fill-rose-400 text-rose-400' : ''}`}
+                      className={`${isTv ? 'h-5 w-5' : 'h-4 w-4'} ${
+                        item.isFavorite ? 'fill-rose-400 text-rose-400' : ''
+                      }`}
                     />
-                    <span className="hidden sm:inline">
-                      {item.isFavorite ? 'Favorited' : 'Favorite'}
+                    <span className={isTv ? 'inline' : 'hidden sm:inline'}>
+                      {item.isFavorite ? 'In My List' : 'My List'}
                     </span>
                   </button>
 
@@ -607,7 +697,7 @@ export const DetailModal: React.FC<DetailModalProps> = ({
         </div>
 
         {/* Main Content Body */}
-        <div className="space-y-6 px-5 pb-7 pt-2 sm:px-8 sm:pb-8">
+        <div className={isTv ? 'space-y-7 px-10 pb-10 pt-2' : 'space-y-6 px-5 pb-7 pt-2 sm:px-8 sm:pb-8'}>
           {/* Download Error Banner */}
           {downloadError && (
             <div className="flex items-center justify-between gap-2 rounded-xl border border-red-500/30 bg-red-500/15 px-3.5 py-2.5 text-xs text-red-200">
@@ -696,32 +786,55 @@ export const DetailModal: React.FC<DetailModalProps> = ({
 
           {/* Media Specs & Pre-Play Audio / Subtitle Selectors */}
           {hasMediaTrackBox && details && (
-            <div className="rounded-2xl border border-white/10 bg-obsidian/65 p-4 space-y-2.5">
+            <div className="rounded-2xl border border-white/10 bg-[#111524] p-4 space-y-3">
               {details.videoSpec && (
-                <div className="grid grid-cols-[84px_1fr] items-center gap-3 text-xs sm:text-sm">
+                <div className="grid grid-cols-[96px_1fr] items-center gap-3 text-xs sm:text-sm">
                   <span className="font-semibold text-zinc-400">Video</span>
-                  <span className="font-medium text-zinc-100">{details.videoSpec}</span>
+                  <span className="font-semibold text-zinc-100">{details.videoSpec}</span>
                 </div>
               )}
 
               {details.audioTracks.length > 0 && (
-                <div className="grid grid-cols-[84px_1fr] items-center gap-3 text-xs sm:text-sm">
+                <div className="grid grid-cols-[96px_1fr] items-center gap-3 text-xs sm:text-sm">
                   <span className="font-semibold text-zinc-400">Audio</span>
                   {details.audioTracks.length > 1 ? (
-                    <select
-                      aria-label="Audio track"
-                      value={selectedAudioIndex ?? details.audioTracks[0].index}
-                      onChange={(e) => setSelectedAudioIndex(Number(e.target.value))}
-                      className="w-full max-w-md rounded-xl border border-white/15 bg-surface px-3 py-1.5 text-xs sm:text-sm font-medium text-white outline-none transition focus:border-violet-400"
-                    >
-                      {details.audioTracks.map((a) => (
-                        <option key={a.index} value={a.index}>
-                          {a.label}
-                        </option>
-                      ))}
-                    </select>
+                    isTv ? (
+                      <div data-tv-row="detail-audio" className="no-scrollbar flex items-center gap-2 overflow-x-auto py-1">
+                        {details.audioTracks.map((a) => {
+                          const active = (selectedAudioIndex ?? details.audioTracks[0].index) === a.index;
+                          return (
+                            <button
+                              key={a.index}
+                              type="button"
+                              data-tv-pill="true"
+                              onClick={() => setSelectedAudioIndex(a.index)}
+                              className={`flex-shrink-0 rounded-full border px-4 py-1.5 text-xs font-bold transition ${
+                                active
+                                  ? 'border-white/35 bg-white/20 text-white'
+                                  : 'border-white/15 bg-obsidian/80 text-zinc-300'
+                              }`}
+                            >
+                              {a.label}
+                            </button>
+                          );
+                        })}
+                      </div>
+                    ) : (
+                      <select
+                        aria-label="Audio track"
+                        value={selectedAudioIndex ?? details.audioTracks[0].index}
+                        onChange={(e) => setSelectedAudioIndex(Number(e.target.value))}
+                        className="w-full max-w-md rounded-xl border border-white/15 bg-surface px-3 py-1.5 text-xs sm:text-sm font-medium text-white outline-none transition focus:border-violet-400"
+                      >
+                        {details.audioTracks.map((a) => (
+                          <option key={a.index} value={a.index}>
+                            {a.label}
+                          </option>
+                        ))}
+                      </select>
+                    )
                   ) : (
-                    <span className="font-medium text-zinc-100">
+                    <span className="font-semibold text-zinc-100">
                       {details.audioTracks[0].label}
                     </span>
                   )}
@@ -729,25 +842,60 @@ export const DetailModal: React.FC<DetailModalProps> = ({
               )}
 
               {details.subtitleTracks.length > 0 && (
-                <div className="grid grid-cols-[84px_1fr] items-center gap-3 text-xs sm:text-sm">
+                <div className="grid grid-cols-[96px_1fr] items-center gap-3 text-xs sm:text-sm">
                   <span className="font-semibold text-zinc-400">Subtitles</span>
-                  <select
-                    aria-label="Subtitle track"
-                    value={selectedSubtitleIndex === null ? 'off' : String(selectedSubtitleIndex)}
-                    onChange={(e) =>
-                      setSelectedSubtitleIndex(
-                        e.target.value === 'off' ? null : Number(e.target.value)
-                      )
-                    }
-                    className="w-full max-w-md rounded-xl border border-white/15 bg-surface px-3 py-1.5 text-xs sm:text-sm font-medium text-white outline-none transition focus:border-violet-400"
-                  >
-                    <option value="off">Off</option>
-                    {details.subtitleTracks.map((s) => (
-                      <option key={s.index} value={String(s.index)}>
-                        {s.label}
-                      </option>
-                    ))}
-                  </select>
+                  {isTv ? (
+                    <div data-tv-row="detail-subs" className="no-scrollbar flex items-center gap-2 overflow-x-auto py-1">
+                      <button
+                        type="button"
+                        data-tv-pill="true"
+                        onClick={() => setSelectedSubtitleIndex(null)}
+                        className={`flex-shrink-0 rounded-full border px-4 py-1.5 text-xs font-bold transition ${
+                          selectedSubtitleIndex === null
+                            ? 'border-white/35 bg-white/20 text-white'
+                            : 'border-white/15 bg-obsidian/80 text-zinc-300'
+                        }`}
+                      >
+                        Off
+                      </button>
+                      {details.subtitleTracks.map((s) => {
+                        const active = selectedSubtitleIndex === s.index;
+                        return (
+                          <button
+                            key={s.index}
+                            type="button"
+                            data-tv-pill="true"
+                            onClick={() => setSelectedSubtitleIndex(s.index)}
+                            className={`flex-shrink-0 rounded-full border px-4 py-1.5 text-xs font-bold transition ${
+                              active
+                                ? 'border-white/35 bg-white/20 text-white'
+                                : 'border-white/15 bg-obsidian/80 text-zinc-300'
+                            }`}
+                          >
+                            {s.label}
+                          </button>
+                        );
+                      })}
+                    </div>
+                  ) : (
+                    <select
+                      aria-label="Subtitle track"
+                      value={selectedSubtitleIndex === null ? 'off' : String(selectedSubtitleIndex)}
+                      onChange={(e) =>
+                        setSelectedSubtitleIndex(
+                          e.target.value === 'off' ? null : Number(e.target.value)
+                        )
+                      }
+                      className="w-full max-w-md rounded-xl border border-white/15 bg-surface px-3 py-1.5 text-xs sm:text-sm font-medium text-white outline-none transition focus:border-violet-400"
+                    >
+                      <option value="off">Off</option>
+                      {details.subtitleTracks.map((s) => (
+                        <option key={s.index} value={String(s.index)}>
+                          {s.label}
+                        </option>
+                      ))}
+                    </select>
+                  )}
                 </div>
               )}
             </div>
@@ -756,20 +904,26 @@ export const DetailModal: React.FC<DetailModalProps> = ({
           {/* Tagline, Overview & Genres */}
           <div>
             {details?.tagline && (
-              <p className="mb-2 text-base sm:text-lg font-semibold italic text-violet-200/95">
+              <p className="mb-2 text-base sm:text-lg font-semibold italic text-zinc-200">
                 “{details.tagline}”
               </p>
             )}
-            <p className="text-sm sm:text-[15px] leading-relaxed text-zinc-300">
+            <p
+              className={
+                isTv
+                  ? 'max-w-4xl text-base leading-relaxed text-zinc-200'
+                  : 'text-sm sm:text-[15px] leading-relaxed text-zinc-300'
+              }
+            >
               {item.overview}
             </p>
 
             {item.genres.length > 0 && (
-              <div className="mt-3.5 flex flex-wrap items-center gap-2">
+              <div className="mt-4 flex flex-wrap items-center gap-2">
                 {item.genres.map((g) => (
                   <span
                     key={g}
-                    className="rounded-full border border-white/10 bg-white/5 px-3 py-1 text-xs font-semibold text-zinc-200"
+                    className="rounded-full border border-white/15 bg-[#141828] px-3.5 py-1 text-xs font-semibold text-zinc-200"
                   >
                     {g}
                   </span>
@@ -783,33 +937,32 @@ export const DetailModal: React.FC<DetailModalProps> = ({
             (details.directors.length > 0 ||
               details.writers.length > 0 ||
               details.studios.length > 0 ||
-              details.imdbId ||
-              details.tmdbId ||
+              (!isTv && (details.imdbId || details.tmdbId)) ||
               details.tags.length > 0) && (
               <div className="space-y-3 border-t border-white/10 pt-4 text-xs sm:text-sm">
                 <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
                   {details.directors.length > 0 && (
                     <div className="flex gap-2">
-                      <span className="w-20 flex-shrink-0 font-semibold text-zinc-400">Director</span>
+                      <span className="w-24 flex-shrink-0 font-semibold text-zinc-400">Director</span>
                       <span className="font-semibold text-white">{details.directors.join(', ')}</span>
                     </div>
                   )}
                   {details.writers.length > 0 && (
                     <div className="flex gap-2">
-                      <span className="w-20 flex-shrink-0 font-semibold text-zinc-400">Writer</span>
+                      <span className="w-24 flex-shrink-0 font-semibold text-zinc-400">Writer</span>
                       <span className="font-semibold text-white">{details.writers.join(', ')}</span>
                     </div>
                   )}
                   {details.studios.length > 0 && (
                     <div className="flex gap-2">
-                      <span className="w-20 flex-shrink-0 font-semibold text-zinc-400">Studio</span>
+                      <span className="w-24 flex-shrink-0 font-semibold text-zinc-400">Studio</span>
                       <span className="text-zinc-200">{details.studios.join(', ')}</span>
                     </div>
                   )}
                 </div>
 
-                {/* External Links: IMDb & TMDB */}
-                {(details.imdbId || details.tmdbId) && (
+                {/* External Links: IMDb & TMDB (desktop/mobile browsers only) */}
+                {!isTv && (details.imdbId || details.tmdbId) && (
                   <div className="flex flex-wrap items-center gap-2 pt-1">
                     {details.imdbId && (
                       <a
@@ -843,7 +996,7 @@ export const DetailModal: React.FC<DetailModalProps> = ({
                     {visibleTags.map((tag) => (
                       <span
                         key={tag}
-                        className="rounded-md bg-white/5 px-2 py-0.5 text-[11px] text-zinc-300"
+                        className="rounded-md bg-white/5 px-2 py-0.5 text-xs text-zinc-300"
                       >
                         {tag}
                       </span>
@@ -851,7 +1004,7 @@ export const DetailModal: React.FC<DetailModalProps> = ({
                     {details.tags.length > 10 && (
                       <button
                         onClick={() => setShowAllTags(!showAllTags)}
-                        className="rounded-md px-2 py-0.5 text-[11px] font-semibold text-violet-300 hover:bg-white/10"
+                        className="rounded-md px-2 py-0.5 text-xs font-semibold text-zinc-200 hover:bg-white/10"
                       >
                         {showAllTags ? 'Show less' : `+${details.tags.length - 10} more`}
                       </button>
@@ -863,35 +1016,51 @@ export const DetailModal: React.FC<DetailModalProps> = ({
 
           {/* Episodes list for Series */}
           {item.type === 'Series' && (
-            <div className="border-t border-white/10 pt-5">
-              <div className="mb-4 flex items-center justify-between gap-3">
-                <div className="flex items-center gap-2.5">
-                  <h3 className="text-base font-bold text-white">Episodes</h3>
+            <div className="border-t border-white/10 pt-6">
+              <div className="mb-4 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+                <div className="flex items-center gap-3">
+                  <h3 className={isTv ? 'text-xl font-extrabold text-white' : 'text-base font-bold text-white'}>
+                    Episodes
+                  </h3>
                   {seasons.length === 1 && selectedSeason && (
-                    <span className="rounded-lg border border-violet-400/30 bg-violet-500/15 px-2.5 py-0.5 text-xs font-bold text-violet-200">
+                    <span className="rounded-lg border border-white/20 bg-[#15192b] px-3 py-1 text-xs font-bold text-zinc-200">
                       {selectedSeason.name}
                     </span>
                   )}
                 </div>
                 {seasons.length > 1 && (
-                  <select
-                    value={selectedSeasonId}
-                    onChange={(e) => setSelectedSeasonId(e.target.value)}
-                    className="rounded-lg border border-white/15 bg-obsidian px-3 py-1.5 text-xs font-semibold text-white outline-none"
+                  <div
+                    data-tv-row="detail-seasons"
+                    className="no-scrollbar flex items-center gap-2 overflow-x-auto py-1"
                   >
-                    {seasons.map((s) => (
-                      <option key={s.id} value={s.id}>
-                        {s.name}
-                      </option>
-                    ))}
-                  </select>
+                    {seasons.map((s) => {
+                      const active = selectedSeasonId === s.id;
+                      return (
+                        <button
+                          key={s.id}
+                          type="button"
+                          data-tv-pill={isTv ? 'true' : undefined}
+                          onClick={() => setSelectedSeasonId(s.id)}
+                          className={`flex-shrink-0 rounded-full border px-4 py-2 text-xs font-bold transition ${
+                            active
+                              ? isTv
+                                ? 'border-white/35 bg-white/20 text-white'
+                                : 'border-violet-400 bg-violet-600 text-white shadow'
+                              : 'border-white/15 bg-[#141828] text-zinc-300 hover:bg-white/15 hover:text-white'
+                          }`}
+                        >
+                          {s.name}
+                        </button>
+                      );
+                    })}
+                  </div>
                 )}
               </div>
 
               {loadingEpisodes ? (
-                <p className="text-xs text-zinc-400">Loading episodes...</p>
+                <p className="text-sm text-zinc-400">Loading episodes...</p>
               ) : (
-                <div className="max-h-80 space-y-2.5 overflow-y-auto pr-1">
+                <div className={isTv ? 'space-y-3.5' : 'max-h-96 space-y-2.5 overflow-y-auto pr-1'}>
                   {episodes.map((ep) => {
                     const epOffline = getOfflineRecord(ep.id);
                     const epActive = getActiveDownload(ep.id);
@@ -907,40 +1076,82 @@ export const DetailModal: React.FC<DetailModalProps> = ({
                             onPlay(ep);
                           }
                         }}
-                        className="group flex cursor-pointer items-center gap-3 sm:gap-4 rounded-xl border border-white/5 bg-obsidian/60 p-2.5 transition hover:border-violet-500/40 hover:bg-surface-elevated focus:outline-none focus:ring-4 focus:ring-violet-400"
+                        className={
+                          isTv
+                            ? 'group flex cursor-pointer items-center gap-5 rounded-2xl border border-white/10 bg-[#111524] p-3.5 transition focus:outline-none'
+                            : 'group flex cursor-pointer items-center gap-3 sm:gap-4 rounded-xl border border-white/5 bg-obsidian/60 p-2.5 transition hover:border-violet-500/40 hover:bg-surface-elevated focus:outline-none focus:ring-4 focus:ring-violet-400'
+                        }
                       >
-                        <div className="relative h-16 w-28 sm:h-20 sm:w-36 flex-shrink-0 overflow-hidden rounded-lg bg-surface">
-                          <img
-                            src={ep.backdropUrl}
-                            alt={ep.name}
-                            className="h-full w-full object-cover"
-                          />
-                          <div className="absolute inset-0 flex items-center justify-center bg-black/40 opacity-0 transition group-hover:opacity-100">
-                            <Play className="h-6 w-6 fill-white text-white" />
-                          </div>
+                        <div
+                          className={`relative flex-shrink-0 overflow-hidden rounded-xl bg-obsidian ${
+                            isTv ? 'aspect-video w-52' : 'h-16 w-28 sm:h-20 sm:w-36 rounded-lg bg-surface'
+                          }`}
+                        >
+                          {ep.backdropUrl && (
+                            <img
+                              src={ep.backdropUrl}
+                              alt={ep.name}
+                              loading="lazy"
+                              decoding="async"
+                              className="h-full w-full object-cover"
+                            />
+                          )}
+                          {!isTv && (
+                            <div className="absolute inset-0 flex items-center justify-center bg-black/40 opacity-0 transition group-hover:opacity-100">
+                              <Play className="h-6 w-6 fill-white text-white" />
+                            </div>
+                          )}
                           {ep.isPlayed && (
-                            <span className="absolute top-1.5 right-1.5 flex h-5 w-5 items-center justify-center rounded-full bg-emerald-500/90 text-white shadow">
-                              <Check className="h-3 w-3" />
+                            <span
+                              className={`absolute top-2 right-2 flex items-center justify-center rounded-full bg-emerald-500 text-white shadow ${
+                                isTv ? 'h-6 w-6' : 'h-5 w-5'
+                              }`}
+                            >
+                              <Check className={isTv ? 'h-3.5 w-3.5 stroke-[3]' : 'h-3 w-3'} />
                             </span>
+                          )}
+                          {(ep.playedPercentage ?? 0) > 0 && !ep.isPlayed && (
+                            <div className="absolute bottom-0 left-0 right-0 h-1.5 bg-white/30">
+                              <div
+                                className="h-full bg-white"
+                                style={{ width: `${Math.min(100, ep.playedPercentage || 0)}%` }}
+                              />
+                            </div>
                           )}
                         </div>
                         <div className="min-w-0 flex-1">
-                          <div className="flex items-center justify-between gap-2">
-                            <h4 className="flex min-w-0 items-center gap-2 text-sm font-semibold text-white">
+                          <div className="flex items-center justify-between gap-3">
+                            <h4
+                              className={`flex min-w-0 items-center gap-2.5 font-bold text-white ${
+                                isTv ? 'text-base' : 'text-sm font-semibold'
+                              }`}
+                            >
                               {ep.episodeNumber != null && (
-                                <span className="flex-shrink-0 rounded bg-white/10 px-1.5 py-0.5 font-mono text-[11px] font-bold text-violet-300">
+                                <span
+                                  className={`flex-shrink-0 rounded-md bg-white/12 font-mono font-extrabold text-zinc-100 ${
+                                    isTv ? 'px-2 py-0.5 text-xs' : 'px-1.5 py-0.5 text-[11px] text-violet-300'
+                                  }`}
+                                >
                                   E{String(ep.episodeNumber).padStart(2, '0')}
                                 </span>
                               )}
                               <span className="truncate">{ep.name}</span>
                             </h4>
                             {ep.runtimeMinutes && (
-                              <span className="text-xs text-zinc-400 flex-shrink-0">
+                              <span
+                                className={`flex-shrink-0 font-semibold text-zinc-400 ${
+                                  isTv ? 'text-sm' : 'text-xs'
+                                }`}
+                              >
                                 {ep.runtimeMinutes}m
                               </span>
                             )}
                           </div>
-                          <p className="mt-1 line-clamp-2 text-xs text-zinc-400">
+                          <p
+                            className={`mt-1.5 line-clamp-2 text-zinc-300 ${
+                              isTv ? 'text-sm leading-relaxed' : 'text-xs text-zinc-400'
+                            }`}
+                          >
                             {ep.overview}
                           </p>
                         </div>
@@ -1080,15 +1291,18 @@ export const DetailModal: React.FC<DetailModalProps> = ({
               <div
                 ref={chaptersRowRef}
                 data-tv-row="detail-chapters"
-                className="flex gap-3 overflow-x-auto pb-2 scrollbar-hide"
+                className="no-scrollbar flex gap-4 overflow-x-auto py-2"
               >
                 {details.chapters.map((ch) => (
                   <button
                     key={`${ch.index}-${ch.startSeconds}`}
+                    data-tv-card="true"
                     onClick={() => onPlay(item, buildStartOptions(false, ch.startSeconds))}
-                    className="group w-44 sm:w-52 flex-shrink-0 text-left focus:outline-none"
+                    className={`group flex-shrink-0 text-left focus:outline-none ${
+                      isTv ? 'w-56' : 'w-44 sm:w-52'
+                    }`}
                   >
-                    <div className="relative aspect-video w-full overflow-hidden rounded-xl border border-white/10 bg-obsidian transition group-hover:border-violet-400/60">
+                    <div className="tv-card-frame relative aspect-video w-full overflow-hidden rounded-xl border border-white/15 bg-obsidian transition group-hover:border-violet-400/60">
                       {ch.imageUrl ? (
                         <img
                           src={ch.imageUrl}
@@ -1107,16 +1321,18 @@ export const DetailModal: React.FC<DetailModalProps> = ({
                           className="h-full w-full object-cover opacity-55 transition duration-300 group-hover:scale-105"
                         />
                       ) : null}
-                      <div className="absolute inset-0 flex items-center justify-center bg-black/30 opacity-0 transition group-hover:opacity-100">
-                        <div className="flex h-9 w-9 items-center justify-center rounded-full bg-white text-obsidian shadow-lg">
-                          <Play className="h-4 w-4 fill-obsidian ml-0.5" />
+                      {!isTv && (
+                        <div className="absolute inset-0 flex items-center justify-center bg-black/30 opacity-0 transition group-hover:opacity-100">
+                          <div className="flex h-9 w-9 items-center justify-center rounded-full bg-white text-obsidian shadow-lg">
+                            <Play className="h-4 w-4 fill-obsidian ml-0.5" />
+                          </div>
                         </div>
-                      </div>
-                      <span className="absolute bottom-1.5 right-1.5 rounded-md bg-black/80 px-1.5 py-0.5 font-mono text-[10px] font-bold text-violet-200 backdrop-blur-sm">
+                      )}
+                      <span className="absolute bottom-1.5 right-1.5 rounded-md bg-black/85 px-2 py-0.5 font-mono text-xs font-bold text-zinc-100">
                         {formatChapterTime(ch.startSeconds)}
                       </span>
                     </div>
-                    <p className="mt-1.5 truncate text-xs font-semibold text-zinc-200 group-hover:text-white">
+                    <p className="tv-card-title mt-2 truncate text-xs font-bold text-zinc-200 group-hover:text-white">
                       {ch.name}
                     </p>
                   </button>
@@ -1127,47 +1343,52 @@ export const DetailModal: React.FC<DetailModalProps> = ({
 
           {/* Cast & Crew Carousel */}
           {castPeople.length > 0 && (
-            <div className="border-t border-white/10 pt-5">
+            <div className="border-t border-white/10 pt-6">
               <div className="mb-3 flex items-center justify-between">
-                <h3 className="text-base sm:text-lg font-bold text-white">Cast &amp; Crew</h3>
-                <div className="hidden sm:flex items-center gap-1.5">
-                  <button
-                    onClick={() => scrollRow(castRowRef, 'left')}
-                    aria-label="Scroll cast left"
-                    className="rounded-full border border-white/15 bg-white/5 p-1.5 text-zinc-300 transition hover:bg-white/15 hover:text-white"
-                  >
-                    <ChevronLeft className="h-4 w-4" />
-                  </button>
-                  <button
-                    onClick={() => scrollRow(castRowRef, 'right')}
-                    aria-label="Scroll cast right"
-                    className="rounded-full border border-white/15 bg-white/5 p-1.5 text-zinc-300 transition hover:bg-white/15 hover:text-white"
-                  >
-                    <ChevronRight className="h-4 w-4" />
-                  </button>
-                </div>
+                <h3 className={isTv ? 'text-xl font-extrabold text-white' : 'text-base sm:text-lg font-bold text-white'}>
+                  Cast &amp; Crew
+                </h3>
+                {!isTv && (
+                  <div className="hidden sm:flex items-center gap-1.5">
+                    <button
+                      onClick={() => scrollRow(castRowRef, 'left')}
+                      aria-label="Scroll cast left"
+                      className="rounded-full border border-white/15 bg-white/5 p-1.5 text-zinc-300 transition hover:bg-white/15 hover:text-white"
+                    >
+                      <ChevronLeft className="h-4 w-4" />
+                    </button>
+                    <button
+                      onClick={() => scrollRow(castRowRef, 'right')}
+                      aria-label="Scroll cast right"
+                      className="rounded-full border border-white/15 bg-white/5 p-1.5 text-zinc-300 transition hover:bg-white/15 hover:text-white"
+                    >
+                      <ChevronRight className="h-4 w-4" />
+                    </button>
+                  </div>
+                )}
               </div>
 
               <div
                 ref={castRowRef}
                 data-tv-row="detail-cast"
-                className="flex gap-3.5 overflow-x-auto pb-2 scrollbar-hide"
+                className="no-scrollbar flex gap-4 overflow-x-auto py-2"
               >
                 {castPeople.map((person) => {
                   const isSelected = selectedPerson?.id === person.id;
                   return (
                     <button
                       key={`${person.id}-${person.role || person.type}`}
+                      data-tv-card="true"
                       onClick={() => handlePersonClick(person)}
-                      className={`group w-28 sm:w-32 flex-shrink-0 text-left transition focus:outline-none ${
-                        isSelected ? 'scale-[1.02]' : ''
-                      }`}
+                      className={`group flex-shrink-0 text-left transition focus:outline-none ${
+                        isTv ? 'w-36' : 'w-28 sm:w-32'
+                      } ${isSelected ? 'scale-[1.02]' : ''}`}
                     >
                       <div
-                        className={`relative aspect-[2/3] w-full overflow-hidden rounded-xl border bg-obsidian/90 transition ${
+                        className={`tv-card-frame relative aspect-[2/3] w-full overflow-hidden rounded-2xl border bg-obsidian/90 transition ${
                           isSelected
-                            ? 'border-violet-400 ring-2 ring-violet-400/60'
-                            : 'border-white/10 group-hover:border-white/30'
+                            ? 'border-white ring-2 ring-white/60'
+                            : 'border-white/15 group-hover:border-white/30'
                         }`}
                       >
                         {person.avatarUrl ? (
@@ -1178,7 +1399,7 @@ export const DetailModal: React.FC<DetailModalProps> = ({
                             className="h-full w-full object-cover transition duration-300 group-hover:scale-105"
                           />
                         ) : (
-                          <div className="flex h-full w-full items-center justify-center bg-gradient-to-br from-violet-900/50 to-surface text-xl font-black text-zinc-400">
+                          <div className="flex h-full w-full items-center justify-center bg-gradient-to-br from-[#161a2e] to-surface text-xl font-black text-zinc-400">
                             {person.name
                               .split(' ')
                               .map((n) => n[0])
@@ -1187,11 +1408,11 @@ export const DetailModal: React.FC<DetailModalProps> = ({
                           </div>
                         )}
                       </div>
-                      <p className="mt-2 truncate text-xs sm:text-[13px] font-bold text-white group-hover:text-violet-300">
+                      <p className="tv-card-title mt-2 truncate text-xs sm:text-sm font-bold text-zinc-200 group-hover:text-white">
                         {person.name}
                       </p>
                       {person.role && (
-                        <p className="truncate text-[11px] text-zinc-400">
+                        <p className="truncate text-xs text-zinc-400">
                           {person.type === 'Actor' ? `as ${person.role}` : person.role}
                         </p>
                       )}
@@ -1202,10 +1423,10 @@ export const DetailModal: React.FC<DetailModalProps> = ({
 
               {/* Inline Person Filmography Drawer (titles in your library starring this person) */}
               {selectedPerson && (
-                <div className="mt-4 rounded-2xl border border-violet-500/30 bg-obsidian/75 p-4 animate-fade-in">
+                <div className="mt-4 rounded-2xl border border-white/15 bg-[#111524] p-4 animate-fade-in">
                   <div className="mb-3 flex items-center justify-between">
                     <h4 className="text-xs sm:text-sm font-bold text-white">
-                      More with <span className="text-violet-300">{selectedPerson.name}</span> in
+                      More with <span className="text-zinc-200">{selectedPerson.name}</span> in
                       your library
                     </h4>
                     <button
@@ -1225,14 +1446,17 @@ export const DetailModal: React.FC<DetailModalProps> = ({
                       No other titles with {selectedPerson.name} in your library yet.
                     </p>
                   ) : (
-                    <div className="flex gap-3 overflow-x-auto pb-1 scrollbar-hide">
+                    <div data-tv-row="detail-person-items" className="no-scrollbar flex gap-4 overflow-x-auto py-2">
                       {personItems.map((pItem) => (
                         <button
                           key={pItem.id}
+                          data-tv-card="true"
                           onClick={() => onSelectItem?.(pItem)}
-                          className="group w-24 sm:w-28 flex-shrink-0 text-left"
+                          className={`group flex-shrink-0 text-left focus:outline-none ${
+                            isTv ? 'w-36' : 'w-24 sm:w-28'
+                          }`}
                         >
-                          <div className="aspect-[2/3] w-full overflow-hidden rounded-xl border border-white/10 bg-surface">
+                          <div className="tv-card-frame aspect-[2/3] w-full overflow-hidden rounded-xl border border-white/15 bg-surface">
                             {pItem.posterUrl && (
                               <img
                                 src={pItem.posterUrl}
@@ -1242,11 +1466,11 @@ export const DetailModal: React.FC<DetailModalProps> = ({
                               />
                             )}
                           </div>
-                          <p className="mt-1.5 truncate text-xs font-semibold text-white group-hover:text-violet-300">
+                          <p className="tv-card-title mt-1.5 truncate text-xs font-bold text-zinc-200 group-hover:text-white">
                             {pItem.name}
                           </p>
                           {pItem.year && (
-                            <p className="text-[10px] text-zinc-400">{pItem.year}</p>
+                            <p className="text-xs text-zinc-400">{pItem.year}</p>
                           )}
                         </button>
                       ))}
@@ -1259,39 +1483,46 @@ export const DetailModal: React.FC<DetailModalProps> = ({
 
           {/* More Like This Carousel */}
           {similarItems.length > 0 && (
-            <div className="border-t border-white/10 pt-5">
+            <div className="border-t border-white/10 pt-6">
               <div className="mb-3 flex items-center justify-between">
-                <h3 className="text-base sm:text-lg font-bold text-white">More Like This</h3>
-                <div className="hidden sm:flex items-center gap-1.5">
-                  <button
-                    onClick={() => scrollRow(similarRowRef, 'left')}
-                    aria-label="Scroll similar left"
-                    className="rounded-full border border-white/15 bg-white/5 p-1.5 text-zinc-300 transition hover:bg-white/15 hover:text-white"
-                  >
-                    <ChevronLeft className="h-4 w-4" />
-                  </button>
-                  <button
-                    onClick={() => scrollRow(similarRowRef, 'right')}
-                    aria-label="Scroll similar right"
-                    className="rounded-full border border-white/15 bg-white/5 p-1.5 text-zinc-300 transition hover:bg-white/15 hover:text-white"
-                  >
-                    <ChevronRight className="h-4 w-4" />
-                  </button>
-                </div>
+                <h3 className={isTv ? 'text-xl font-extrabold text-white' : 'text-base sm:text-lg font-bold text-white'}>
+                  More Like This
+                </h3>
+                {!isTv && (
+                  <div className="hidden sm:flex items-center gap-1.5">
+                    <button
+                      onClick={() => scrollRow(similarRowRef, 'left')}
+                      aria-label="Scroll similar left"
+                      className="rounded-full border border-white/15 bg-white/5 p-1.5 text-zinc-300 transition hover:bg-white/15 hover:text-white"
+                    >
+                      <ChevronLeft className="h-4 w-4" />
+                    </button>
+                    <button
+                      onClick={() => scrollRow(similarRowRef, 'right')}
+                      aria-label="Scroll similar right"
+                      className="rounded-full border border-white/15 bg-white/5 p-1.5 text-zinc-300 transition hover:bg-white/15 hover:text-white"
+                    >
+                      <ChevronRight className="h-4 w-4" />
+                    </button>
+                  </div>
+                )}
               </div>
 
               <div
                 ref={similarRowRef}
                 data-tv-row="detail-similar"
-                className="flex gap-3.5 overflow-x-auto pb-2 scrollbar-hide"
+                className="no-scrollbar flex gap-5 overflow-x-auto py-2"
               >
                 {similarItems.map((sim) => (
                   <button
                     key={sim.id}
+                    data-tv-card="true"
                     onClick={() => onSelectItem?.(sim)}
-                    className="group w-28 sm:w-32 flex-shrink-0 text-left focus:outline-none"
+                    className={`group flex-shrink-0 text-left focus:outline-none ${
+                      isTv ? 'w-40' : 'w-28 sm:w-32'
+                    }`}
                   >
-                    <div className="relative aspect-[2/3] w-full overflow-hidden rounded-xl border border-white/10 bg-obsidian transition group-hover:border-violet-400/50">
+                    <div className="tv-card-frame relative aspect-[2/3] w-full overflow-hidden rounded-2xl border border-white/15 bg-obsidian transition group-hover:border-violet-400/50">
                       {sim.posterUrl && (
                         <img
                           src={sim.posterUrl}
@@ -1301,16 +1532,16 @@ export const DetailModal: React.FC<DetailModalProps> = ({
                         />
                       )}
                       {sim.rating && (
-                        <span className="absolute top-1.5 right-1.5 flex items-center gap-0.5 rounded-md bg-black/75 px-1.5 py-0.5 text-[10px] font-bold text-amber-300 backdrop-blur-sm">
-                          <Star className="h-2.5 w-2.5 fill-amber-300" />
+                        <span className="absolute top-2 right-2 flex items-center gap-1 rounded-md bg-black/85 px-2 py-0.5 text-xs font-extrabold text-amber-300">
+                          <Star className="h-3 w-3 fill-amber-300" />
                           {sim.rating}
                         </span>
                       )}
                     </div>
-                    <p className="mt-2 truncate text-xs sm:text-[13px] font-bold text-white group-hover:text-violet-300">
+                    <p className="tv-card-title mt-2 truncate text-xs sm:text-sm font-bold text-zinc-200 group-hover:text-white">
                       {sim.name}
                     </p>
-                    {sim.year && <p className="text-[11px] text-zinc-400">{sim.year}</p>}
+                    {sim.year && <p className="text-xs text-zinc-400">{sim.year}</p>}
                   </button>
                 ))}
               </div>

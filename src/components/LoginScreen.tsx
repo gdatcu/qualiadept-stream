@@ -24,6 +24,7 @@ import {
   saveSession,
 } from '../services/jellyfin';
 import type { AuthSession, PublicUserProfile } from '../types/media';
+import { isTizenTv } from '../utils/tvNavigation';
 import { BrandLogo } from './BrandLogo';
 
 interface LoginScreenProps {
@@ -142,27 +143,38 @@ export const LoginScreen: React.FC<LoginScreenProps> = ({
     onLogin(demo);
   };
 
+  const isTv = isTizenTv();
+
   return (
     <div className="relative min-h-screen w-full flex items-center justify-center overflow-hidden bg-obsidian px-4 pt-[max(1.5rem,var(--app-safe-top))] pb-[max(1.5rem,var(--app-safe-bottom))]">
       {/* Ambient HBO Max style glowing gradients (hidden on Tizen TV to keep GPU responsive) */}
       <div className="tv-ambient-glow pointer-events-none absolute -top-40 -left-40 h-[520px] w-[520px] rounded-full bg-violet-700/25 blur-[140px]" />
       <div className="tv-ambient-glow pointer-events-none absolute -bottom-40 -right-40 h-[520px] w-[520px] rounded-full bg-indigo-600/20 blur-[140px]" />
 
-      <div className="relative z-10 w-full max-w-xl animate-fade-in">
+      <div
+        className={`relative z-10 w-full animate-fade-in ${
+          isTv && hasAnyProfiles && !showLoginForm ? 'max-w-5xl' : 'max-w-xl'
+        }`}
+      >
         {onCancel && (
           <button
+            data-tv-pill={isTv ? 'true' : undefined}
             onClick={onCancel}
-            className="mb-5 inline-flex items-center gap-2 rounded-xl border border-white/15 bg-white/5 px-3.5 py-2 text-xs font-semibold text-zinc-200 transition hover:bg-white/10"
+            className={
+              isTv
+                ? 'mb-6 inline-flex items-center gap-2.5 rounded-full border border-white/20 bg-[#121626] px-5 py-2.5 text-sm font-bold text-zinc-100'
+                : 'mb-5 inline-flex items-center gap-2 rounded-xl border border-white/15 bg-white/5 px-3.5 py-2 text-xs font-semibold text-zinc-200 transition hover:bg-white/10'
+            }
           >
-            <ArrowLeft className="h-4 w-4" />
+            <ArrowLeft className={isTv ? 'h-5 w-5' : 'h-4 w-4'} />
             Back
           </button>
         )}
 
         {/* Brand */}
-        <div className="mb-7 text-center">
+        <div className={isTv ? 'mb-10 text-center' : 'mb-7 text-center'}>
           <BrandLogo size="lg" stacked />
-          <p className="mt-3 text-sm text-zinc-400">
+          <p className={isTv ? 'mt-4 text-2xl font-bold text-zinc-200' : 'mt-3 text-sm text-zinc-400'}>
             {hasAnyProfiles && !showLoginForm
               ? "Who's watching?"
               : 'Sign in with your personal family account'}
@@ -177,43 +189,80 @@ export const LoginScreen: React.FC<LoginScreenProps> = ({
 
         {/* Netflix-style "Who's Watching?" Profile Switcher */}
         {hasAnyProfiles && !showLoginForm ? (
-          <div className="rounded-2xl border border-white/10 bg-surface/85 p-6 shadow-2xl backdrop-blur-xl">
-            <div className="grid grid-cols-2 gap-4 sm:grid-cols-3">
-              {savedProfiles.map((profile) => {
+          <div
+            className={
+              isTv
+                ? 'px-4 py-2'
+                : 'rounded-2xl border border-white/10 bg-surface/85 p-6 shadow-2xl backdrop-blur-xl'
+            }
+          >
+            <div
+              data-tv-row={isTv ? 'login-profiles' : undefined}
+              className={
+                isTv
+                  ? 'flex flex-wrap items-start justify-center gap-8 py-4'
+                  : 'grid grid-cols-2 gap-4 sm:grid-cols-3'
+              }
+            >
+              {savedProfiles.map((profile, idx) => {
                 const isCurrent = profile.userId === activeUserId;
                 return (
                   <div key={profile.userId} className="relative flex flex-col items-center">
                     <button
+                      data-tv-card={isTv ? 'true' : undefined}
+                      data-tv-default-focus={isTv && idx === 0 ? 'true' : undefined}
                       onClick={() => {
                         if (managingProfiles) return;
                         handleQuickSwitch(profile);
                       }}
-                      className={`group flex w-full flex-col items-center rounded-2xl border p-4 transition ${
-                        isCurrent
-                          ? 'border-violet-400/70 bg-violet-500/15'
-                          : 'border-white/10 bg-white/5 hover:scale-[1.03] hover:border-violet-400/50 hover:bg-white/10'
-                      }`}
+                      className={
+                        isTv
+                          ? 'group flex w-40 flex-col items-center focus:outline-none'
+                          : `group flex w-full flex-col items-center rounded-2xl border p-4 transition ${
+                              isCurrent
+                                ? 'border-violet-400/70 bg-violet-500/15'
+                                : 'border-white/10 bg-white/5 hover:scale-[1.03] hover:border-violet-400/50 hover:bg-white/10'
+                            }`
+                      }
                     >
                       <div
-                        className={`relative flex h-16 w-16 items-center justify-center rounded-2xl bg-gradient-to-br ${getAvatarGradient(
+                        className={`tv-card-frame relative flex items-center justify-center bg-gradient-to-br ${getAvatarGradient(
                           profile.username
-                        )} text-2xl font-black text-white shadow-xl`}
+                        )} font-black text-white shadow-xl ${
+                          isTv
+                            ? 'h-32 w-32 rounded-3xl border-2 border-white/20 text-5xl'
+                            : 'h-16 w-16 rounded-2xl text-2xl'
+                        }`}
                       >
                         {profile.username.charAt(0).toUpperCase()}
                         {profile.isAdmin && (
                           <span
                             title="Admin"
-                            className="absolute -top-1.5 -right-1.5 flex h-6 w-6 items-center justify-center rounded-full bg-amber-400 text-obsidian shadow"
+                            className={`absolute -top-2 -right-2 flex items-center justify-center rounded-full bg-amber-400 text-obsidian shadow ${
+                              isTv ? 'h-8 w-8' : 'h-6 w-6'
+                            }`}
                           >
-                            <Crown className="h-3.5 w-3.5" />
+                            <Crown className={isTv ? 'h-4 w-4' : 'h-3.5 w-3.5'} />
                           </span>
                         )}
                       </div>
-                      <span className="mt-3 max-w-full truncate text-sm font-bold text-white">
+                      <span
+                        className={
+                          isTv
+                            ? 'tv-card-title mt-3.5 max-w-full truncate text-lg font-bold text-zinc-200'
+                            : 'mt-3 max-w-full truncate text-sm font-bold text-white'
+                        }
+                      >
                         {profile.username}
                       </span>
-                      <span className="mt-0.5 text-[10px] font-medium text-emerald-300">
-                        {isCurrent ? 'Active now' : 'Saved on device'}
+                      <span
+                        className={
+                          isTv
+                            ? 'mt-0.5 text-xs font-medium text-emerald-300'
+                            : 'mt-0.5 text-[10px] font-medium text-emerald-300'
+                        }
+                      >
+                        {isCurrent ? 'Active now' : 'Ready'}
                       </span>
                     </button>
 
@@ -221,60 +270,102 @@ export const LoginScreen: React.FC<LoginScreenProps> = ({
                       <button
                         onClick={() => handleRemoveSaved(profile.userId)}
                         title={`Remove ${profile.username} from this device`}
-                        className="absolute -top-2 -right-2 flex h-7 w-7 items-center justify-center rounded-full bg-red-600 text-white shadow-lg hover:bg-red-500"
+                        className="absolute -top-2 -right-2 flex h-8 w-8 items-center justify-center rounded-full bg-red-600 text-white shadow-lg hover:bg-red-500"
                       >
-                        <Trash2 className="h-3.5 w-3.5" />
+                        <Trash2 className="h-4 w-4" />
                       </button>
                     )}
                   </div>
                 );
               })}
 
-              {extraPublicProfiles.map((pub) => (
+              {extraPublicProfiles.map((pub, idx) => (
                 <button
                   key={pub.id}
+                  data-tv-card={isTv ? 'true' : undefined}
+                  data-tv-default-focus={isTv && savedProfiles.length === 0 && idx === 0 ? 'true' : undefined}
                   onClick={() => handleSelectPublicUser(pub)}
-                  className="group flex flex-col items-center rounded-2xl border border-white/10 bg-white/5 p-4 transition hover:scale-[1.03] hover:border-violet-400/50 hover:bg-white/10"
+                  className={
+                    isTv
+                      ? 'group flex w-40 flex-col items-center focus:outline-none'
+                      : 'group flex flex-col items-center rounded-2xl border border-white/10 bg-white/5 p-4 transition hover:scale-[1.03] hover:border-violet-400/50 hover:bg-white/10'
+                  }
                 >
                   <div
-                    className={`flex h-16 w-16 items-center justify-center rounded-2xl bg-gradient-to-br ${getAvatarGradient(
+                    className={`tv-card-frame flex items-center justify-center bg-gradient-to-br ${getAvatarGradient(
                       pub.name
-                    )} text-2xl font-black text-white shadow-xl`}
+                    )} font-black text-white shadow-xl ${
+                      isTv
+                        ? 'h-32 w-32 rounded-3xl border-2 border-white/20 text-5xl'
+                        : 'h-16 w-16 rounded-2xl text-2xl'
+                    }`}
                   >
                     {pub.name.charAt(0).toUpperCase()}
                   </div>
-                  <span className="mt-3 max-w-full truncate text-sm font-bold text-white">
+                  <span
+                    className={
+                      isTv
+                        ? 'tv-card-title mt-3.5 max-w-full truncate text-lg font-bold text-zinc-200'
+                        : 'mt-3 max-w-full truncate text-sm font-bold text-white'
+                    }
+                  >
                     {pub.name}
                   </span>
-                  <span className="mt-0.5 text-[10px] text-zinc-400">
-                    {pub.hasPassword ? 'Tap to enter password' : 'Tap to sign in'}
+                  <span className={isTv ? 'mt-0.5 text-xs text-zinc-400' : 'mt-0.5 text-[10px] text-zinc-400'}>
+                    {pub.hasPassword ? 'Password protected' : 'Sign in'}
                   </span>
                 </button>
               ))}
 
               {/* Add / Sign In Another Account */}
               <button
+                data-tv-card={isTv ? 'true' : undefined}
                 onClick={() => {
                   setUsername('');
                   setPassword('');
                   setError(null);
                   setShowLoginForm(true);
                 }}
-                className="flex flex-col items-center justify-center rounded-2xl border border-dashed border-white/20 bg-white/[0.02] p-4 text-zinc-300 transition hover:border-violet-400/60 hover:bg-white/5 hover:text-white"
+                className={
+                  isTv
+                    ? 'group flex w-40 flex-col items-center text-zinc-300 focus:outline-none'
+                    : 'flex flex-col items-center justify-center rounded-2xl border border-dashed border-white/20 bg-white/[0.02] p-4 text-zinc-300 transition hover:border-violet-400/60 hover:bg-white/5 hover:text-white'
+                }
               >
-                <div className="flex h-16 w-16 items-center justify-center rounded-2xl border border-white/15 bg-white/5">
-                  <Plus className="h-7 w-7 text-violet-300" />
+                <div
+                  className={
+                    isTv
+                      ? 'tv-card-frame flex h-32 w-32 items-center justify-center rounded-3xl border-2 border-white/20 bg-[#121626]'
+                      : 'flex h-16 w-16 items-center justify-center rounded-2xl border border-white/15 bg-white/5'
+                  }
+                >
+                  <Plus className={isTv ? 'h-12 w-12 text-zinc-200' : 'h-7 w-7 text-violet-300'} />
                 </div>
-                <span className="mt-3 text-sm font-semibold">Add Account</span>
-                <span className="mt-0.5 text-[10px] text-zinc-500">Sign in with password</span>
+                <span
+                  className={
+                    isTv
+                      ? 'tv-card-title mt-3.5 text-lg font-bold text-zinc-200'
+                      : 'mt-3 text-sm font-semibold'
+                  }
+                >
+                  Add Account
+                </span>
+                <span className={isTv ? 'mt-0.5 text-xs text-zinc-500' : 'mt-0.5 text-[10px] text-zinc-500'}>
+                  Other profile
+                </span>
               </button>
             </div>
 
             {savedProfiles.length > 0 && (
-              <div className="mt-5 flex items-center justify-center border-t border-white/10 pt-4">
+              <div className="mt-7 flex items-center justify-center pt-3">
                 <button
+                  data-tv-pill={isTv ? 'true' : undefined}
                   onClick={() => setManagingProfiles((v) => !v)}
-                  className="rounded-xl border border-white/15 bg-white/5 px-4 py-1.5 text-xs font-semibold text-zinc-300 transition hover:bg-white/10 hover:text-white"
+                  className={
+                    isTv
+                      ? 'rounded-full border border-white/20 bg-[#121626] px-6 py-2.5 text-sm font-bold text-zinc-200'
+                      : 'rounded-xl border border-white/15 bg-white/5 px-4 py-1.5 text-xs font-semibold text-zinc-300 transition hover:bg-white/10 hover:text-white'
+                  }
                 >
                   {managingProfiles ? 'Done Managing' : 'Manage Device Profiles'}
                 </button>

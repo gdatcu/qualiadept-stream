@@ -28,9 +28,10 @@
     outline-offset: 2px;
   }
 
-  /* 10-foot living-room Smart TV UI scaling & GPU-friendly instant focus elevation */
+  /* 10-foot living-room Smart TV UI scaling & GPU-friendly cinema focus elevation */
   html.tizen-tv {
-    font-size: 20px;
+    /* Scales proportionally across 1080p (~24px = 1rem) and 4K UHD (~48px = 1rem) Tizen WebViews */
+    font-size: clamp(22px, 1.25vw, 48px);
     scroll-behavior: auto !important;
   }
 
@@ -38,7 +39,7 @@
     background: #06070d;
   }
 
-  /* Samsung Tizen WebView slows to 5 FPS with multiple backdrop-filter layers; use solid/translucent fills instead */
+  /* Samsung Tizen WebView drops frames with backdrop-filter; use rich high-contrast dark surfaces instead */
   html.tizen-tv * {
     backdrop-filter: none !important;
     -webkit-backdrop-filter: none !important;
@@ -56,28 +57,56 @@
     animation: none !important;
   }
 
+  /* Clean Smart TV focus ring (Netflix / Apple TV+ crisp white ring, no double neon halo) */
   html.tizen-tv button:focus,
   html.tizen-tv a:focus,
   html.tizen-tv input:focus,
   html.tizen-tv select:focus,
-  html.tizen-tv [tabindex]:focus {
-    outline: 4px solid #ffffff !important;
+  html.tizen-tv [tabindex]:focus:not([data-tv-card="true"]) {
+    outline: 3px solid #ffffff !important;
     outline-offset: 2px !important;
-    box-shadow: 0 0 0 6px rgba(139, 92, 246, 0.7) !important;
+    box-shadow: 0 12px 30px rgba(0, 0, 0, 0.78) !important;
     position: relative;
     z-index: 25;
     transition: none !important;
   }
 
+  /* Apple TV+ / Netflix style solid-white pill elevation when focused via remote */
+  html.tizen-tv [data-tv-pill="true"]:focus {
+    background-color: #ffffff !important;
+    color: #06070d !important;
+    border-color: #ffffff !important;
+    outline: none !important;
+    transform: scale(1.04) !important;
+    box-shadow: 0 12px 32px rgba(0, 0, 0, 0.85) !important;
+  }
+
+  html.tizen-tv [data-tv-pill="true"]:focus svg {
+    color: #06070d !important;
+  }
+
+  /* Frameless cinema poster & landscape cards on TV */
   html.tizen-tv [data-tv-card="true"] {
-    transition: transform 80ms ease-out !important;
+    outline: none !important;
     box-shadow: none !important;
+    transition: transform 90ms ease-out !important;
     will-change: auto;
   }
 
   html.tizen-tv [data-tv-card="true"]:focus {
-    transform: scale(1.04) !important;
-    border-color: rgba(255, 255, 255, 0.95) !important;
+    outline: none !important;
+    box-shadow: none !important;
+    transform: scale(1.06) !important;
+    z-index: 25;
+  }
+
+  html.tizen-tv [data-tv-card="true"]:focus .tv-card-frame {
+    border-color: #ffffff !important;
+    box-shadow: 0 0 0 3px #ffffff, 0 20px 44px rgba(0, 0, 0, 0.88) !important;
+  }
+
+  html.tizen-tv [data-tv-card="true"]:focus .tv-card-title {
+    color: #ffffff !important;
   }
 }
 

@@ -1,5 +1,5 @@
 import React, { Suspense, lazy, useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { Folder, Star, X } from 'lucide-react';
+import { Check, Folder, Search, Star, X } from 'lucide-react';
 import { BrowseFilterBar, type SortOption } from './components/BrowseFilterBar';
 import { DetailModal } from './components/DetailModal';
 import { HeroBanner } from './components/HeroBanner';
@@ -87,6 +87,7 @@ export const App: React.FC = () => {
   const [error, setError] = useState<string | null>(null);
 
   const [activeTab, setActiveTab] = useState<NavTab>('home');
+  const [tvSearchOpen, setTvSearchOpen] = useState(false);
   const [searchQuery, setSearchQuery] = useState('');
   const [selectedGenre, setSelectedGenre] = useState<string | null>(null);
   const [sortBy, setSortBy] = useState<SortOption>('recent');
@@ -125,6 +126,8 @@ export const App: React.FC = () => {
   availableUpdateRef.current = availableUpdate;
   const activeTabRef = useRef(activeTab);
   activeTabRef.current = activeTab;
+  const tvSearchOpenRef = useRef(tvSearchOpen);
+  tvSearchOpenRef.current = tvSearchOpen;
   const searchQueryRef = useRef(searchQuery);
   searchQueryRef.current = searchQuery;
   const selectedGenreRef = useRef(selectedGenre);
@@ -380,6 +383,14 @@ export const App: React.FC = () => {
         if (!fromTizenKey) armBackGuard();
         return;
       }
+      if (tvSearchOpenRef.current) {
+        setTvSearchOpen(false);
+        setSearchQuery('');
+        setSelectedSearchPerson(null);
+        setSelectedSearchPersonItems([]);
+        if (!fromTizenKey) armBackGuard();
+        return;
+      }
       if (searchQueryRef.current.trim()) {
         setSearchQuery('');
         if (!fromTizenKey) armBackGuard();
@@ -577,7 +588,12 @@ export const App: React.FC = () => {
 
   const handleTabChange = (tab: NavTab) => {
     setActiveTab(tab);
+    setTvSearchOpen(false);
     setSelectedGenre(null);
+    if (isTizenTv()) {
+      setSearchQuery('');
+      setSortBy('recent');
+    }
     if (tab !== 'home') {
       setSelectedLibraryId(null);
     }
@@ -690,11 +706,24 @@ export const App: React.FC = () => {
 
   const heroItem = useMemo(() => {
     if (tabBaseItems.length === 0) return null;
-    return tabBaseItems[0];
+    return (
+      tabBaseItems.find((i) => Boolean(i.backdropUrl && i.backdropUrl !== i.posterUrl)) ||
+      tabBaseItems[0]
+    );
   }, [tabBaseItems]);
 
   const isFilteredGridMode = Boolean(
-    searchQuery.trim() || selectedGenre || sortBy !== 'recent'
+    tvSearchOpen || searchQuery.trim() || selectedGenre || sortBy !== 'recent'
+  );
+
+  const showHero = Boolean(heroItem && activeTab === 'home' && !isFilteredGridMode && !selectedLibraryId);
+  const showGridSection = Boolean(
+    isFilteredGridMode ||
+      selectedSearchPerson ||
+      selectedLibraryId ||
+      activeTab === 'movies' ||
+      activeTab === 'series' ||
+      activeTab === 'mylist'
   );
 
   if (!session || switchingProfile) {
@@ -726,6 +755,18 @@ export const App: React.FC = () => {
         onSignOut={handleSignOut}
         downloadCount={offlineCount}
         activeDownloadCount={activeDownloadCount}
+        tvSearchActive={tvSearchOpen}
+        onToggleTvSearch={() => {
+          setTvSearchOpen((prev) => {
+            const next = !prev;
+            if (!next) {
+              setSearchQuery('');
+              setSelectedSearchPerson(null);
+              setSelectedSearchPersonItems([]);
+            }
+            return next;
+          });
+        }}
       />
 
       {activeTab === 'family' && session.isAdmin ? (
@@ -739,24 +780,25 @@ export const App: React.FC = () => {
       ) : loading ? (
         <div className="flex min-h-screen items-center justify-center">
           <div className="text-center">
-            <div className="mx-auto h-10 w-10 animate-spin rounded-full border-4 border-violet-500 border-t-transparent" />
-            <p className="mt-4 text-sm text-zinc-400">Loading your cinema...</p>
+            <div className="mx-auto h-12 w-12 animate-spin rounded-full border-4 border-white border-t-transparent" />
+            <p className="mt-4 text-base font-medium text-zinc-300">Loading your cinema...</p>
           </div>
         </div>
       ) : error ? (
         <div className="flex min-h-screen flex-col items-center justify-center px-4 text-center">
-          <p className="text-red-300 text-sm max-w-md">{error}</p>
-          <div className="mt-4 flex flex-wrap items-center justify-center gap-3">
+          <p className="text-red-300 text-base max-w-md">{error}</p>
+          <div className="mt-5 flex flex-wrap items-center justify-center gap-3">
             <button
+              data-tv-pill={isTv ? 'true' : undefined}
               onClick={() => loadLibrary(session)}
-              className="rounded-xl bg-violet-600 px-5 py-2.5 text-sm font-semibold text-white hover:bg-violet-500"
+              className="rounded-full bg-white px-6 py-3 text-sm font-extrabold text-obsidian hover:bg-zinc-200"
             >
               Retry
             </button>
             {offlineCount > 0 && (
               <button
                 onClick={() => setActiveTab('downloads')}
-                className="rounded-xl border border-emerald-400/30 bg-emerald-500/15 px-5 py-2.5 text-sm font-semibold text-emerald-200 hover:bg-emerald-500/25"
+                className="rounded-full border border-emerald-400/30 bg-emerald-500/15 px-5 py-3 text-sm font-semibold text-emerald-200 hover:bg-emerald-500/25"
               >
                 Open Offline Downloads ({offlineCount})
               </button>
@@ -765,7 +807,7 @@ export const App: React.FC = () => {
         </div>
       ) : (
         <main>
-          {heroItem && activeTab === 'home' && !isFilteredGridMode && (
+          {showHero && heroItem && (
             <HeroBanner
               item={heroItem}
               onPlay={(item) =>
@@ -777,11 +819,19 @@ export const App: React.FC = () => {
           )}
 
           <div
-            className={`mx-auto max-w-[1600px] ${
-              heroItem && activeTab === 'home' && !isFilteredGridMode
-                ? '-mt-10 relative z-10'
-                : 'pt-[calc(7.5rem+var(--app-safe-top))]'
-            }`}
+            className={
+              isTv
+                ? `w-full ${
+                    showHero
+                      ? '-mt-10 relative z-10'
+                      : 'pt-[calc(6.2rem+var(--app-safe-top))]'
+                  }`
+                : `mx-auto max-w-[1600px] ${
+                    showHero
+                      ? '-mt-10 relative z-10'
+                      : 'pt-[calc(7.5rem+var(--app-safe-top))]'
+                  }`
+            }
           >
             {activeTab === 'home' && !isFilteredGridMode && !selectedLibraryId && resumeItems.length > 0 && (
               <MediaRow
@@ -814,23 +864,36 @@ export const App: React.FC = () => {
             )}
 
             {/* Real Jellyfin Library View Pills (e.g. All Libraries · Movies · Shows · Private) */}
-            {activeTab === 'home' && libraryViews.length > 1 && !searchQuery.trim() && (
+            {activeTab === 'home' && libraryViews.length > 1 && !searchQuery.trim() && !tvSearchOpen && (
               <div
                 data-tv-row="library-views"
-                className="no-scrollbar mb-3 flex items-center gap-2 overflow-x-auto px-4 sm:px-8"
+                className={
+                  isTv
+                    ? 'no-scrollbar mb-6 flex items-center gap-3 overflow-x-auto px-[3.8vw] py-2'
+                    : 'no-scrollbar mb-3 flex items-center gap-2 overflow-x-auto px-4 sm:px-8'
+                }
               >
                 <button
+                  data-tv-pill={isTv ? 'true' : undefined}
                   onClick={() => {
                     setSelectedLibraryId(null);
                     setSelectedGenre(null);
                   }}
-                  className={`flex flex-shrink-0 items-center gap-1.5 rounded-full border px-3.5 py-1.5 text-xs font-bold transition ${
-                    selectedLibraryId === null
-                      ? 'border-violet-400 bg-violet-600 text-white shadow-lg shadow-violet-900/30'
-                      : 'border-white/15 bg-white/5 text-zinc-300 hover:bg-white/15 hover:text-white'
-                  }`}
+                  className={
+                    isTv
+                      ? `flex flex-shrink-0 items-center gap-2 rounded-full border px-5 py-2.5 text-sm font-bold transition ${
+                          selectedLibraryId === null
+                            ? 'border-white/30 bg-white/20 text-white'
+                            : 'border-white/15 bg-[#121626]/95 text-zinc-300'
+                        }`
+                      : `flex flex-shrink-0 items-center gap-1.5 rounded-full border px-3.5 py-1.5 text-xs font-bold transition ${
+                          selectedLibraryId === null
+                            ? 'border-violet-400 bg-violet-600 text-white shadow-lg shadow-violet-900/30'
+                            : 'border-white/15 bg-white/5 text-zinc-300 hover:bg-white/15 hover:text-white'
+                        }`
+                  }
                 >
-                  <Folder className="h-3.5 w-3.5" />
+                  <Folder className={isTv ? 'h-4 w-4' : 'h-3.5 w-3.5'} />
                   All Libraries
                 </button>
                 {libraryViews.map((view) => {
@@ -838,15 +901,24 @@ export const App: React.FC = () => {
                   return (
                     <button
                       key={view.id}
+                      data-tv-pill={isTv ? 'true' : undefined}
                       onClick={() => {
                         setSelectedLibraryId(active ? null : view.id);
                         setSelectedGenre(null);
                       }}
-                      className={`flex flex-shrink-0 items-center gap-1.5 rounded-full border px-3.5 py-1.5 text-xs font-bold transition ${
-                        active
-                          ? 'border-violet-400 bg-violet-600 text-white shadow-lg shadow-violet-900/30'
-                          : 'border-white/15 bg-white/5 text-zinc-300 hover:bg-white/15 hover:text-white'
-                      }`}
+                      className={
+                        isTv
+                          ? `flex flex-shrink-0 items-center gap-2 rounded-full border px-5 py-2.5 text-sm font-bold transition ${
+                              active
+                                ? 'border-white/30 bg-white/20 text-white'
+                                : 'border-white/15 bg-[#121626]/95 text-zinc-300'
+                            }`
+                          : `flex flex-shrink-0 items-center gap-1.5 rounded-full border px-3.5 py-1.5 text-xs font-bold transition ${
+                              active
+                                ? 'border-violet-400 bg-violet-600 text-white shadow-lg shadow-violet-900/30'
+                                : 'border-white/15 bg-white/5 text-zinc-300 hover:bg-white/15 hover:text-white'
+                            }`
+                      }
                     >
                       {view.name}
                     </button>
@@ -855,38 +927,166 @@ export const App: React.FC = () => {
               </div>
             )}
 
-            {/* Prominent Search + Genre Filter Pills + Sort Bar */}
-            <BrowseFilterBar
-              searchQuery={searchQuery}
-              onSearchChange={handleSearchChange}
-              genres={availableGenres}
-              selectedGenre={selectedGenre}
-              onSelectGenre={setSelectedGenre}
-              sortBy={sortBy}
-              onSortChange={setSortBy}
-              totalMatching={filteredItems.length}
-            />
+            {/* Desktop & Mobile: Prominent Search + Genre Filter Pills + Sort Bar */}
+            {!isTv && (
+              <BrowseFilterBar
+                searchQuery={searchQuery}
+                onSearchChange={handleSearchChange}
+                genres={availableGenres}
+                selectedGenre={selectedGenre}
+                onSelectGenre={setSelectedGenre}
+                sortBy={sortBy}
+                onSortChange={setSortBy}
+                totalMatching={filteredItems.length}
+              />
+            )}
+
+            {/* Smart TV Dedicated Search & Browse Filter Header (hidden on TV Home so Home stays pure cinema!) */}
+            {isTv && showGridSection && (
+              <section className="mb-6 px-[3.8vw]">
+                {tvSearchOpen && (
+                  <div className="mb-5 flex items-center gap-4 rounded-2xl border border-white/20 bg-[#121626] px-5 py-3.5 shadow-2xl">
+                    <Search className="h-6 w-6 flex-shrink-0 text-zinc-300" />
+                    <input
+                      autoFocus
+                      data-tv-default-focus="true"
+                      type="text"
+                      value={searchQuery}
+                      onChange={(e) => handleSearchChange(e.target.value)}
+                      placeholder="Search movies, series, actors, or year..."
+                      className="flex-1 bg-transparent text-lg font-semibold text-white placeholder-zinc-500 outline-none"
+                    />
+                    {searchQuery && (
+                      <button
+                        data-tv-pill="true"
+                        type="button"
+                        onClick={() => handleSearchChange('')}
+                        className="flex items-center gap-1.5 rounded-full border border-white/15 bg-white/10 px-4 py-1.5 text-sm font-bold text-zinc-200"
+                      >
+                        <X className="h-4 w-4" />
+                        Clear
+                      </button>
+                    )}
+                  </div>
+                )}
+
+                <div className="flex flex-wrap items-center justify-between gap-4">
+                  <h1 className="text-3xl font-black tracking-tight text-white">
+                    {selectedSearchPerson
+                      ? `Titles with ${selectedSearchPerson.name}`
+                      : tvSearchOpen && !searchQuery.trim()
+                      ? 'Search Catalog'
+                      : searchQuery.trim()
+                      ? `Results for "${searchQuery.trim()}"`
+                      : selectedLibraryId
+                      ? libraryViews.find((v) => v.id === selectedLibraryId)?.name || 'Library'
+                      : activeTab === 'movies'
+                      ? 'Movies'
+                      : activeTab === 'series'
+                      ? 'TV Series'
+                      : activeTab === 'mylist'
+                      ? 'My List'
+                      : 'Catalog'}{' '}
+                    <span className="ml-1 text-lg font-semibold text-zinc-400">
+                      ({filteredItems.length})
+                    </span>
+                  </h1>
+
+                  {/* Focusable TV Sort Pills (replaces ugly native <select> popup on TV!) */}
+                  <div data-tv-row="tv-sort" className="flex items-center gap-2">
+                    {(
+                      [
+                        { id: 'recent', label: 'Recent' },
+                        { id: 'rating', label: 'Top Rated' },
+                        { id: 'year', label: 'Newest' },
+                        { id: 'az', label: 'A–Z' },
+                      ] as const
+                    ).map((opt) => (
+                      <button
+                        key={opt.id}
+                        data-tv-pill="true"
+                        type="button"
+                        onClick={() => setSortBy(opt.id)}
+                        className={`rounded-full border px-4 py-2 text-xs font-bold transition ${
+                          sortBy === opt.id
+                            ? 'border-white/35 bg-white/20 text-white'
+                            : 'border-white/12 bg-[#121626] text-zinc-300'
+                        }`}
+                      >
+                        {opt.label}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+
+                {/* Focusable TV Genre Pills */}
+                {availableGenres.length > 0 && activeTab !== 'mylist' && (
+                  <div
+                    data-tv-row="tv-genres"
+                    className="no-scrollbar mt-4 flex items-center gap-2.5 overflow-x-auto py-2"
+                  >
+                    <button
+                      data-tv-pill="true"
+                      type="button"
+                      onClick={() => setSelectedGenre(null)}
+                      className={`flex-shrink-0 rounded-full border px-5 py-2 text-xs font-bold transition ${
+                        selectedGenre === null
+                          ? 'border-white/35 bg-white/20 text-white'
+                          : 'border-white/12 bg-[#121626] text-zinc-300'
+                      }`}
+                    >
+                      All Genres
+                    </button>
+                    {availableGenres.map((g) => {
+                      const active = selectedGenre === g.name;
+                      return (
+                        <button
+                          key={g.name}
+                          data-tv-pill="true"
+                          type="button"
+                          onClick={() => setSelectedGenre(active ? null : g.name)}
+                          className={`flex flex-shrink-0 items-center gap-2 rounded-full border px-5 py-2 text-xs font-bold transition ${
+                            active
+                              ? 'border-white/35 bg-white/20 text-white'
+                              : 'border-white/12 bg-[#121626] text-zinc-300'
+                          }`}
+                        >
+                          <span>{g.name}</span>
+                          <span className="opacity-65">{g.count}</span>
+                        </button>
+                      );
+                    })}
+                  </div>
+                )}
+              </section>
+            )}
 
             {/* Matching Actors / Directors from live Jellyfin Search */}
             {searchQuery.trim().length >= 2 && remoteSearchPeople.length > 0 && (
-              <div className="mb-5 px-4 sm:px-8">
+              <div className={isTv ? 'mb-6 px-[3.8vw]' : 'mb-5 px-4 sm:px-8'}>
                 <div className="mb-2 text-xs font-bold uppercase tracking-wider text-zinc-400">
                   Cast &amp; Crew
                 </div>
-                <div className="no-scrollbar flex items-center gap-2.5 overflow-x-auto pb-1">
+                <div
+                  data-tv-row="search-people"
+                  className="no-scrollbar flex items-center gap-3 overflow-x-auto py-1.5"
+                >
                   {remoteSearchPeople.map((person) => {
                     const active = selectedSearchPerson?.id === person.id;
                     return (
                       <button
                         key={person.id}
+                        data-tv-pill={isTv ? 'true' : undefined}
                         onClick={() => handleSelectSearchPerson(person)}
-                        className={`flex flex-shrink-0 items-center gap-2.5 rounded-full border py-1 pl-1.5 pr-3.5 text-xs font-bold transition ${
+                        className={`flex flex-shrink-0 items-center gap-2.5 rounded-full border py-1.5 pl-2 pr-4 text-xs font-bold transition ${
                           active
-                            ? 'border-violet-400 bg-violet-600 text-white shadow-lg'
-                            : 'border-white/15 bg-white/5 text-zinc-200 hover:bg-white/15'
+                            ? isTv
+                              ? 'border-white/35 bg-white/20 text-white'
+                              : 'border-violet-400 bg-violet-600 text-white shadow-lg'
+                            : 'border-white/15 bg-[#121626] text-zinc-200 hover:bg-white/15'
                         }`}
                       >
-                        <div className="h-7 w-7 overflow-hidden rounded-full bg-surface-elevated flex-shrink-0 flex items-center justify-center text-[10px] font-black text-zinc-300">
+                        <div className="h-8 w-8 overflow-hidden rounded-full bg-surface-elevated flex-shrink-0 flex items-center justify-center text-xs font-black text-zinc-300">
                           {person.avatarUrl ? (
                             <img
                               src={person.avatarUrl}
@@ -898,7 +1098,7 @@ export const App: React.FC = () => {
                           )}
                         </div>
                         <span>{person.name}</span>
-                        {active && <X className="h-3.5 w-3.5" />}
+                        {active && <X className="h-4 w-4" />}
                       </button>
                     );
                   })}
@@ -907,10 +1107,10 @@ export const App: React.FC = () => {
             )}
 
             {filteredItems.length === 0 ? (
-              <div className="px-8 py-16 text-center text-zinc-400">
+              <div className="px-8 py-20 text-center text-zinc-400">
                 {searchQuery.trim() || selectedGenre || selectedSearchPerson ? (
                   <div>
-                    <p className="text-sm text-zinc-300">
+                    <p className={isTv ? 'text-lg text-zinc-300' : 'text-sm text-zinc-300'}>
                       No titles found
                       {selectedSearchPerson ? ` featuring ${selectedSearchPerson.name}` : ''}
                       {selectedGenre ? ` in ${selectedGenre}` : ''}
@@ -920,62 +1120,72 @@ export const App: React.FC = () => {
                       .
                     </p>
                     <button
+                      data-tv-pill={isTv ? 'true' : undefined}
                       onClick={() => {
                         setSearchQuery('');
                         setSelectedGenre(null);
                         setSelectedSearchPerson(null);
                         setSelectedSearchPersonItems([]);
                       }}
-                      className="mt-4 rounded-xl bg-violet-600 px-4 py-2 text-xs font-semibold text-white hover:bg-violet-500"
+                      className={
+                        isTv
+                          ? 'mt-5 rounded-full bg-white px-6 py-3 text-sm font-extrabold text-obsidian'
+                          : 'mt-4 rounded-xl bg-violet-600 px-4 py-2 text-xs font-semibold text-white hover:bg-violet-500'
+                      }
                     >
                       Clear Filters
                     </button>
                   </div>
                 ) : activeTab === 'mylist' ? (
-                  'Your list is empty. Click the heart button on any movie or series to save it here.'
+                  <p className={isTv ? 'text-lg text-zinc-300' : 'text-sm text-zinc-400'}>
+                    Your list is empty. Add any movie or series to My List to find it here.
+                  </p>
                 ) : (
                   'No titles in this library yet.'
                 )}
               </div>
-            ) : isFilteredGridMode ||
-              selectedSearchPerson ||
-              selectedLibraryId ||
-              activeTab === 'movies' ||
-              activeTab === 'series' ||
-              activeTab === 'mylist' ? (
-              <section className="px-4 sm:px-8">
-                <div className="mb-4 flex items-center justify-between">
-                  <h2 className="text-lg sm:text-xl font-bold text-white">
-                    {selectedSearchPerson
-                      ? `Titles with ${selectedSearchPerson.name}`
-                      : searchQuery.trim()
-                      ? `Results for "${searchQuery.trim()}"${selectedGenre ? ` · ${selectedGenre}` : ''}`
-                      : selectedLibraryId
-                      ? `${libraryViews.find((v) => v.id === selectedLibraryId)?.name || 'Library'}${
-                          selectedGenre ? ` · ${selectedGenre}` : ''
-                        }`
-                      : selectedGenre
-                      ? `${selectedGenre}${
-                          activeTab === 'movies'
-                            ? ' Movies'
-                            : activeTab === 'series'
-                            ? ' TV Series'
-                            : ''
-                        }`
-                      : activeTab === 'movies'
-                      ? 'All Movies'
-                      : activeTab === 'series'
-                      ? 'All TV Series'
-                      : activeTab === 'mylist'
-                      ? 'My List'
-                      : 'All Titles'}{' '}
-                    <span className="text-sm font-medium text-zinc-400">
-                      ({filteredItems.length})
-                    </span>
-                  </h2>
-                </div>
+            ) : showGridSection ? (
+              <section className={isTv ? 'px-[3.8vw]' : 'px-4 sm:px-8'}>
+                {!isTv && (
+                  <div className="mb-4 flex items-center justify-between">
+                    <h2 className="text-lg sm:text-xl font-bold text-white">
+                      {selectedSearchPerson
+                        ? `Titles with ${selectedSearchPerson.name}`
+                        : searchQuery.trim()
+                        ? `Results for "${searchQuery.trim()}"${selectedGenre ? ` · ${selectedGenre}` : ''}`
+                        : selectedLibraryId
+                        ? `${libraryViews.find((v) => v.id === selectedLibraryId)?.name || 'Library'}${
+                            selectedGenre ? ` · ${selectedGenre}` : ''
+                          }`
+                        : selectedGenre
+                        ? `${selectedGenre}${
+                            activeTab === 'movies'
+                              ? ' Movies'
+                              : activeTab === 'series'
+                              ? ' TV Series'
+                              : ''
+                          }`
+                        : activeTab === 'movies'
+                        ? 'All Movies'
+                        : activeTab === 'series'
+                        ? 'All TV Series'
+                        : activeTab === 'mylist'
+                        ? 'My List'
+                        : 'All Titles'}{' '}
+                      <span className="text-sm font-medium text-zinc-400">
+                        ({filteredItems.length})
+                      </span>
+                    </h2>
+                  </div>
+                )}
 
-                <div className="grid grid-cols-2 gap-4 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 xl:grid-cols-6">
+                <div
+                  className={
+                    isTv
+                      ? 'grid grid-cols-6 gap-x-6 gap-y-8 py-2'
+                      : 'grid grid-cols-2 gap-4 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 xl:grid-cols-6'
+                  }
+                >
                   {filteredItems.map((item) => (
                     <div
                       key={item.id}
@@ -989,10 +1199,18 @@ export const App: React.FC = () => {
                           setSelectedItem(item);
                         }
                       }}
-                      className="group cursor-pointer overflow-hidden rounded-2xl border border-white/10 bg-surface shadow-lg transition hover:scale-[1.03] hover:border-violet-400/50 focus:outline-none focus:scale-[1.04] focus:border-violet-400 focus:ring-4 focus:ring-violet-400"
+                      className={
+                        isTv
+                          ? 'group cursor-pointer focus:outline-none'
+                          : 'group cursor-pointer overflow-hidden rounded-2xl border border-white/10 bg-surface shadow-lg transition hover:scale-[1.03] hover:border-violet-400/50 focus:outline-none focus:scale-[1.04] focus:border-violet-400 focus:ring-4 focus:ring-violet-400'
+                      }
                     >
-                      <div className="relative aspect-[2/3] bg-surface-elevated">
-                        {item.posterUrl && (
+                      <div
+                        className={`tv-card-frame relative aspect-[2/3] overflow-hidden bg-[#111524] ${
+                          isTv ? 'rounded-2xl border border-white/15' : 'bg-surface-elevated'
+                        }`}
+                      >
+                        {item.posterUrl ? (
                           <img
                             src={item.posterUrl}
                             alt={item.name}
@@ -1000,24 +1218,61 @@ export const App: React.FC = () => {
                             decoding="async"
                             className="h-full w-full object-cover"
                           />
+                        ) : (
+                          <div className="flex h-full w-full items-center justify-center p-4 text-center">
+                            <span className="text-sm font-bold text-zinc-300 line-clamp-3">
+                              {item.name}
+                            </span>
+                          </div>
                         )}
-                        <div className="absolute top-2 left-2 rounded-md bg-black/70 px-1.5 py-0.5 text-[10px] font-bold uppercase tracking-wider text-zinc-200 backdrop-blur-sm">
-                          {item.type === 'Series'
-                            ? 'Series'
-                            : item.type === 'BoxSet'
-                            ? 'Collection'
-                            : 'Movie'}
-                        </div>
+                        {item.isPlayed && (
+                          <div
+                            className={`pointer-events-none absolute top-2.5 left-2.5 flex items-center justify-center rounded-full bg-emerald-500 text-white shadow-lg ${
+                              isTv ? 'h-7 w-7' : 'h-5 w-5'
+                            }`}
+                          >
+                            <Check className={isTv ? 'h-4 w-4 stroke-[3]' : 'h-3 w-3'} />
+                          </div>
+                        )}
+                        {!item.isPlayed && !isTv && (
+                          <div className="absolute top-2 left-2 rounded-md bg-black/70 px-1.5 py-0.5 text-[10px] font-bold uppercase tracking-wider text-zinc-200 backdrop-blur-sm">
+                            {item.type === 'Series'
+                              ? 'Series'
+                              : item.type === 'BoxSet'
+                              ? 'Collection'
+                              : 'Movie'}
+                          </div>
+                        )}
                         {item.rating && (
-                          <div className="absolute top-2 right-2 flex items-center gap-0.5 rounded-md bg-black/70 px-1.5 py-0.5 text-[10px] font-bold text-amber-300 backdrop-blur-sm">
-                            <Star className="h-2.5 w-2.5 fill-amber-300" />
+                          <div
+                            className={
+                              isTv
+                                ? 'absolute top-2.5 right-2.5 flex items-center gap-1 rounded-lg border border-white/10 bg-black/85 px-2 py-0.5 text-xs font-extrabold text-amber-300'
+                                : 'absolute top-2 right-2 flex items-center gap-0.5 rounded-md bg-black/70 px-1.5 py-0.5 text-[10px] font-bold text-amber-300 backdrop-blur-sm'
+                            }
+                          >
+                            <Star className={isTv ? 'h-3.5 w-3.5 fill-amber-300' : 'h-2.5 w-2.5 fill-amber-300'} />
                             {item.rating}
                           </div>
                         )}
                       </div>
-                      <div className="p-2.5">
-                        <p className="truncate text-sm font-semibold text-white">{item.name}</p>
-                        <p className="truncate text-xs text-zinc-400">
+                      <div className={isTv ? 'pt-2.5 px-0.5' : 'p-2.5'}>
+                        <p
+                          className={
+                            isTv
+                              ? 'tv-card-title truncate text-[0.92rem] font-bold text-zinc-200'
+                              : 'truncate text-sm font-semibold text-white'
+                          }
+                        >
+                          {item.name}
+                        </p>
+                        <p
+                          className={
+                            isTv
+                              ? 'mt-0.5 truncate text-[0.78rem] font-medium text-zinc-400'
+                              : 'truncate text-xs text-zinc-400'
+                          }
+                        >
                           {item.year ? `${item.year}` : ''}
                           {item.genres[0] ? `${item.year ? ' · ' : ''}${item.genres[0]}` : ''}
                         </p>
@@ -1113,16 +1368,28 @@ export const App: React.FC = () => {
         <UpdateModal update={availableUpdate} onClose={() => setAvailableUpdate(null)} />
       )}
 
-      {/* Samsung Android double-back exit confirmation toast */}
+      {/* Samsung Android / TV double-back exit confirmation toast */}
       {showExitToast && (
-        <div className="pointer-events-none fixed bottom-[calc(2rem+var(--app-safe-bottom))] left-1/2 z-[60] -translate-x-1/2 rounded-full border border-white/15 bg-black/85 px-4 py-2 text-xs font-semibold text-white shadow-2xl backdrop-blur-md">
+        <div
+          className={
+            isTv
+              ? 'pointer-events-none fixed bottom-10 left-1/2 z-[60] -translate-x-1/2 rounded-full border border-white/25 bg-[#101320] px-6 py-3 text-sm font-bold text-white shadow-2xl'
+              : 'pointer-events-none fixed bottom-[calc(2rem+var(--app-safe-bottom))] left-1/2 z-[60] -translate-x-1/2 rounded-full border border-white/15 bg-black/85 px-4 py-2 text-xs font-semibold text-white shadow-2xl backdrop-blur-md'
+          }
+        >
           Press Back again to exit
         </div>
       )}
 
       {/* Update check status toast */}
       {statusToast && !showExitToast && (
-        <div className="pointer-events-none fixed bottom-[calc(2rem+var(--app-safe-bottom))] left-1/2 z-[60] max-w-[90vw] -translate-x-1/2 truncate rounded-full border border-violet-400/35 bg-black/85 px-4 py-2 text-xs font-semibold text-zinc-100 shadow-2xl backdrop-blur-md">
+        <div
+          className={
+            isTv
+              ? 'pointer-events-none fixed bottom-10 left-1/2 z-[60] max-w-[90vw] -translate-x-1/2 truncate rounded-full border border-white/25 bg-[#101320] px-6 py-3 text-sm font-bold text-zinc-100 shadow-2xl'
+              : 'pointer-events-none fixed bottom-[calc(2rem+var(--app-safe-bottom))] left-1/2 z-[60] max-w-[90vw] -translate-x-1/2 truncate rounded-full border border-violet-400/35 bg-black/85 px-4 py-2 text-xs font-semibold text-zinc-100 shadow-2xl backdrop-blur-md'
+          }
+        >
           {statusToast}
         </div>
       )}

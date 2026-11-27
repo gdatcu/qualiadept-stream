@@ -1,7 +1,7 @@
 import React from 'react';
 
 interface BrandLogoProps {
-  size?: 'sm' | 'md' | 'lg';
+  size?: 'sm' | 'md' | 'tv' | 'lg';
   hideText?: boolean;
   hideTextOnMobile?: boolean;
   stacked?: boolean;
@@ -16,6 +16,8 @@ export const BrandLogo: React.FC<BrandLogoProps> = ({
   const iconSize =
     size === 'lg'
       ? 'h-20 w-20 rounded-2xl'
+      : size === 'tv'
+      ? 'h-11 w-11 rounded-2xl'
       : size === 'sm'
       ? 'h-8 w-8 sm:h-9 sm:w-9 rounded-xl'
       : 'h-10 w-10 rounded-xl';
@@ -23,6 +25,8 @@ export const BrandLogo: React.FC<BrandLogoProps> = ({
   const titleSize =
     size === 'lg'
       ? 'text-3xl sm:text-4xl'
+      : size === 'tv'
+      ? 'text-lg'
       : size === 'sm'
       ? 'text-sm sm:text-base'
       : 'text-base sm:text-lg';
@@ -30,17 +34,17 @@ export const BrandLogo: React.FC<BrandLogoProps> = ({
   return (
     <div
       className={`inline-flex items-center ${
-        stacked ? 'flex-col gap-3.5 text-center' : 'gap-2.5 text-left'
+        stacked ? 'flex-col gap-3.5 text-center' : size === 'tv' ? 'gap-3 text-left' : 'gap-2.5 text-left'
       }`}
     >
       <img
-        src={size === 'lg' ? './icon-512.png' : './icon-192.png'}
+        src={size === 'lg' || size === 'tv' ? './icon-512.png' : './icon-192.png'}
         alt="Qualiadept Stream"
         className={`${iconSize} flex-shrink-0 object-cover ring-1 ring-white/15 shadow-lg shadow-fuchsia-600/30`}
       />
       {!hideText && (
         <div
-          className={`flex items-center gap-1.5 leading-none ${
+          className={`flex items-center gap-2 leading-none ${
             hideTextOnMobile ? 'hidden sm:inline-flex' : 'inline-flex'
           }`}
         >
@@ -51,6 +55,8 @@ export const BrandLogo: React.FC<BrandLogoProps> = ({
             className={`${
               size === 'lg'
                 ? 'text-sm sm:text-base px-2.5 py-1'
+                : size === 'tv'
+                ? 'text-xs px-2 py-1'
                 : 'text-[10px] sm:text-xs px-1.5 py-0.5'
             } rounded-md bg-gradient-to-r from-sky-400 via-violet-500 to-fuchsia-500 font-black uppercase tracking-widest text-white shadow-sm shadow-violet-600/40`}
           >

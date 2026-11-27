@@ -22,7 +22,7 @@ import { getDirectPlayVideoCodecs } from '../utils/network';
 
 const SESSION_STORAGE_KEY = 'qualiadept_stream_session_v1';
 const SAVED_PROFILES_KEY = 'qualiadept_stream_profiles_v1';
-const LIBRARY_CACHE_PREFIX = 'qualiadept_library_cache_v1_';
+const LIBRARY_CACHE_PREFIX = 'qualiadept_library_cache_v2_';
 const DEVICE_ID_KEY = 'qualiadept_stream_device_id';
 const DEMO_FAVORITES_KEY = 'qualiadept_demo_favorites';
 
@@ -426,24 +426,31 @@ function mapJellyfinItem(raw: RawJellyfinItem, session: AuthSession): MediaItem 
     raw.ParentBackdropItemId && raw.ParentBackdropImageTags?.length
   );
 
-  const onTv = typeof window !== 'undefined' && (Boolean((window as unknown as { tizen?: unknown }).tizen) || /Tizen/i.test(navigator.userAgent));
-  const posterW = onTv ? 280 : 400;
-  const posterH = onTv ? 420 : 600;
-  const posterQ = onTv ? 78 : 90;
-  const backdropW = onTv ? 1280 : 1920;
-  const backdropQ = onTv ? 78 : 88;
+  const onTv =
+    typeof window !== 'undefined' &&
+    (Boolean((window as unknown as { tizen?: unknown }).tizen) || /Tizen/i.test(navigator.userAgent));
+  const posterW = onTv ? 380 : 400;
+  const posterH = onTv ? 570 : 600;
+  const posterQ = onTv ? 85 : 90;
+  const backdropW = 1920;
+  const backdropQ = onTv ? 85 : 88;
+  const isEpisode = raw.Type === 'Episode';
 
   const posterUrl = hasPrimary
-    ? `${base}/Items/${raw.Id}/Images/Primary?fillHeight=${posterH}&fillWidth=${posterW}&quality=${posterQ}&api_key=${token}`
+    ? isEpisode
+      ? `${base}/Items/${raw.Id}/Images/Primary?maxWidth=640&quality=85&api_key=${token}`
+      : `${base}/Items/${raw.Id}/Images/Primary?fillHeight=${posterH}&fillWidth=${posterW}&quality=${posterQ}&api_key=${token}`
     : hasBackdrop
     ? `${base}/Items/${raw.Id}/Images/Backdrop/0?fillHeight=${posterH}&fillWidth=${posterW}&quality=${posterQ}&api_key=${token}`
     : '';
 
   let backdropUrl = posterUrl;
-  if (hasBackdrop) {
+  if (isEpisode && hasPrimary) {
+    backdropUrl = `${base}/Items/${raw.Id}/Images/Primary?maxWidth=680&quality=85&api_key=${token}`;
+  } else if (hasBackdrop) {
     backdropUrl = `${base}/Items/${raw.Id}/Images/Backdrop/0?maxWidth=${backdropW}&quality=${backdropQ}&api_key=${token}`;
   } else if (hasParentBackdrop) {
-    backdropUrl = `${base}/Items/${raw.ParentBackdropItemId}/Images/Backdrop/0?maxWidth=${backdropW}&quality=${backdropQ}&api_key=${token}`;
+    backdropUrl = `${base}/Items/${raw.ParentBackdropItemId}/Images/Backdrop/0?maxWidth=${isEpisode ? 720 : backdropW}&quality=${backdropQ}&api_key=${token}`;
   }
 
   const runtimeMinutes = raw.RunTimeTicks

@@ -18,6 +18,8 @@ interface NavbarProps {
   onSignOut: () => void;
   downloadCount?: number;
   activeDownloadCount?: number;
+  tvSearchActive?: boolean;
+  onToggleTvSearch?: () => void;
 }
 
 export const Navbar: React.FC<NavbarProps> = ({
@@ -31,6 +33,8 @@ export const Navbar: React.FC<NavbarProps> = ({
   onSignOut,
   downloadCount = 0,
   activeDownloadCount = 0,
+  tvSearchActive = false,
+  onToggleTvSearch,
 }) => {
   const [scrolled, setScrolled] = useState(false);
   const [searchOpen, setSearchOpen] = useState(false);
@@ -53,20 +57,22 @@ export const Navbar: React.FC<NavbarProps> = ({
     ...(session.isAdmin && !session.isDemo ? [{ id: 'family' as const, label: 'Family' }] : []),
   ];
 
+  const iconCls = isTv ? 'h-5 w-5' : 'h-4 w-4';
+
   const renderTabIcon = (id: NavTab) => {
     switch (id) {
       case 'home':
-        return <Home className="h-4 w-4" />;
+        return <Home className={iconCls} />;
       case 'movies':
-        return <Film className="h-4 w-4" />;
+        return <Film className={iconCls} />;
       case 'series':
-        return <Tv className="h-4 w-4" />;
+        return <Tv className={iconCls} />;
       case 'mylist':
-        return <Bookmark className="h-4 w-4" />;
+        return <Bookmark className={iconCls} />;
       case 'downloads':
-        return <Download className="h-4 w-4" />;
+        return <Download className={iconCls} />;
       case 'family':
-        return <Crown className="h-4 w-4 text-amber-400" />;
+        return <Crown className={`${iconCls} text-amber-400`} />;
     }
   };
 
@@ -77,106 +83,142 @@ export const Navbar: React.FC<NavbarProps> = ({
       } ${
         scrolled
           ? isTv
-            ? 'bg-obsidian/95 border-b border-white/10'
+            ? 'bg-[#070910]/98 border-b border-white/10 shadow-2xl'
             : 'bg-obsidian/90 backdrop-blur-xl border-b border-white/10 shadow-lg'
+          : isTv
+          ? 'bg-gradient-to-b from-obsidian via-obsidian/80 to-transparent'
           : 'bg-gradient-to-b from-obsidian/95 via-obsidian/55 to-transparent'
       }`}
     >
       <div
         data-tv-row="navbar"
-        className={`mx-auto flex max-w-[1600px] items-center justify-between px-4 sm:px-8 ${
-          isTv ? 'py-4' : 'py-3.5'
-        }`}
+        className={
+          isTv
+            ? 'flex w-full items-center justify-between px-[3.8vw] py-4'
+            : 'mx-auto flex max-w-[1600px] items-center justify-between px-4 sm:px-8 py-3.5'
+        }
       >
-        {/* Left: Brand + Nav */}
+        {/* Left: Brand (+ inline Nav on non-TV) */}
         <div className="flex items-center gap-4 md:gap-8 min-w-0">
           <button
             onClick={() => {
               onTabChange('home');
               onSearchChange('');
             }}
-            className="flex-shrink-0 rounded-xl transition hover:opacity-90"
+            className="flex-shrink-0 rounded-2xl transition hover:opacity-90"
           >
-            <BrandLogo size={isTv ? 'md' : 'sm'} hideTextOnMobile={searchOpen} />
+            <BrandLogo size={isTv ? 'tv' : 'sm'} hideTextOnMobile={!isTv && searchOpen} />
           </button>
 
-          <nav
-            className={`hidden md:flex items-center gap-1 ${
-              isTv ? 'rounded-full border border-white/10 bg-white/[0.06] p-1 backdrop-blur-xl' : ''
-            }`}
-          >
-            {navItems.map((item) => (
-              <button
-                key={item.id}
-                onClick={() => onTabChange(item.id)}
-                className={`flex items-center gap-2 font-semibold transition ${
-                  isTv ? 'rounded-full px-4 py-2 text-sm' : 'rounded-lg px-3.5 py-2 text-sm font-medium'
-                } ${
-                  activeTab === item.id
-                    ? isTv
-                      ? 'bg-white text-obsidian shadow-lg'
-                      : 'bg-white/10 text-white'
-                    : 'text-zinc-300 hover:text-white hover:bg-white/10'
-                }`}
-              >
-                {(isTv || item.id === 'family') && renderTabIcon(item.id)}
-                <span>{item.label}</span>
-                {item.id === 'downloads' && (activeDownloadCount > 0 || downloadCount > 0) && (
-                  <span
-                    className={`rounded-full px-1.5 py-0.5 text-[10px] font-bold leading-none ${
-                      activeDownloadCount > 0
-                        ? 'bg-violet-500 text-white animate-pulse'
-                        : 'bg-emerald-500/20 text-emerald-300'
-                    }`}
-                  >
-                    {activeDownloadCount > 0 ? activeDownloadCount : downloadCount}
-                  </span>
-                )}
-              </button>
-            ))}
-          </nav>
+          {!isTv && (
+            <nav className="hidden md:flex items-center gap-1">
+              {navItems.map((item) => (
+                <button
+                  key={item.id}
+                  onClick={() => onTabChange(item.id)}
+                  className={`flex items-center gap-2 rounded-lg px-3.5 py-2 text-sm font-medium transition ${
+                    activeTab === item.id
+                      ? 'bg-white/10 text-white'
+                      : 'text-zinc-300 hover:text-white hover:bg-white/10'
+                  }`}
+                >
+                  {item.id === 'family' && renderTabIcon(item.id)}
+                  <span>{item.label}</span>
+                  {item.id === 'downloads' && (activeDownloadCount > 0 || downloadCount > 0) && (
+                    <span
+                      className={`rounded-full px-1.5 py-0.5 text-[10px] font-bold leading-none ${
+                        activeDownloadCount > 0
+                          ? 'bg-violet-500 text-white animate-pulse'
+                          : 'bg-emerald-500/20 text-emerald-300'
+                      }`}
+                    >
+                      {activeDownloadCount > 0 ? activeDownloadCount : downloadCount}
+                    </span>
+                  )}
+                </button>
+              ))}
+            </nav>
+          )}
         </div>
 
-        {/* Right: Search + Profile Switcher Menu */}
-        <div className="flex items-center gap-2.5 sm:gap-3">
-          {searchOpen ? (
-            <div className="flex items-center rounded-full border border-white/15 bg-surface/90 px-3.5 py-1.5 backdrop-blur-md">
-              <Search className="h-4 w-4 text-zinc-400" />
-              <input
-                autoFocus
-                type="text"
-                value={searchQuery}
-                onChange={(e) => onSearchChange(e.target.value)}
-                placeholder="Search titles, actors, year..."
-                className="w-36 sm:w-56 bg-transparent px-2.5 text-sm text-white placeholder-zinc-500 outline-none"
-              />
-              <button
-                onClick={() => {
-                  onSearchChange('');
-                  setSearchOpen(false);
-                }}
-                className="rounded-full p-1 text-zinc-400 hover:text-white"
-              >
-                <X className="h-4 w-4" />
-              </button>
-            </div>
-          ) : (
+        {/* Center (Smart TV only): Apple TV+ / Netflix 10-foot Capsule Navigation Dock */}
+        {isTv && (
+          <nav className="flex items-center gap-1.5 rounded-full border border-white/15 bg-[#121626]/95 p-1.5 shadow-2xl">
+            {navItems.map((item) => {
+              const isActive = !tvSearchActive && activeTab === item.id;
+              return (
+                <button
+                  key={item.id}
+                  data-tv-pill="true"
+                  onClick={() => onTabChange(item.id)}
+                  className={`flex items-center gap-2.5 rounded-full px-5 py-2.5 text-[0.92rem] font-bold transition ${
+                    isActive
+                      ? 'bg-white/20 text-white shadow-md'
+                      : 'text-zinc-300 hover:text-white'
+                  }`}
+                >
+                  {renderTabIcon(item.id)}
+                  <span>{item.label}</span>
+                </button>
+              );
+            })}
+
             <button
-              onClick={() => setSearchOpen(true)}
-              aria-label="Search"
-              className={`flex items-center gap-1.5 text-zinc-200 transition hover:bg-white/15 hover:text-white ${
-                isTv
-                  ? 'rounded-full border border-white/10 bg-white/[0.06] px-4 py-2 text-sm font-semibold'
-                  : 'rounded-xl p-2'
+              data-tv-pill="true"
+              onClick={() => {
+                if (onToggleTvSearch) onToggleTvSearch();
+              }}
+              className={`flex items-center gap-2.5 rounded-full px-5 py-2.5 text-[0.92rem] font-bold transition ${
+                tvSearchActive
+                  ? 'bg-white/20 text-white shadow-md'
+                  : 'text-zinc-300 hover:text-white'
               }`}
             >
-              <Search className="h-4 w-4 sm:h-5 sm:w-5" />
-              {isTv && <span>Search</span>}
+              <Search className="h-5 w-5" />
+              <span>Search</span>
             </button>
+          </nav>
+        )}
+
+        {/* Right: Search (non-TV) + Profile Switcher Menu */}
+        <div className="flex items-center gap-2.5 sm:gap-3">
+          {!isTv && (
+            <>
+              {searchOpen ? (
+                <div className="flex items-center rounded-full border border-white/15 bg-surface/90 px-3.5 py-1.5 backdrop-blur-md">
+                  <Search className="h-4 w-4 text-zinc-400" />
+                  <input
+                    autoFocus
+                    type="text"
+                    value={searchQuery}
+                    onChange={(e) => onSearchChange(e.target.value)}
+                    placeholder="Search titles, actors, year..."
+                    className="w-36 sm:w-56 bg-transparent px-2.5 text-sm text-white placeholder-zinc-500 outline-none"
+                  />
+                  <button
+                    onClick={() => {
+                      onSearchChange('');
+                      setSearchOpen(false);
+                    }}
+                    className="rounded-full p-1 text-zinc-400 hover:text-white"
+                  >
+                    <X className="h-4 w-4" />
+                  </button>
+                </div>
+              ) : (
+                <button
+                  onClick={() => setSearchOpen(true)}
+                  aria-label="Search"
+                  className="flex items-center gap-1.5 rounded-xl p-2 text-zinc-200 transition hover:bg-white/15 hover:text-white"
+                >
+                  <Search className="h-4 w-4 sm:h-5 sm:w-5" />
+                </button>
+              )}
+            </>
           )}
 
           {session.isDemo && (
-            <span className="hidden sm:inline-flex items-center rounded-full border border-violet-500/40 bg-violet-500/15 px-2.5 py-1 text-[11px] font-semibold text-violet-300">
+            <span className="hidden sm:inline-flex items-center rounded-full border border-violet-500/40 bg-violet-500/15 px-2.5 py-1 text-xs font-semibold text-violet-300">
               DEMO MODE
             </span>
           )}
@@ -184,19 +226,36 @@ export const Navbar: React.FC<NavbarProps> = ({
           {/* Clickable Profile Pill + Dropdown */}
           <div className="relative">
             <button
+              data-tv-pill={isTv ? 'true' : undefined}
               onClick={() => setProfileMenuOpen((v) => !v)}
-              className={`flex items-center gap-2 border border-white/15 bg-white/[0.07] transition hover:border-violet-400/50 hover:bg-white/15 ${
-                isTv ? 'rounded-full px-3.5 py-1.5' : 'rounded-xl px-2.5 py-1.5'
+              className={`flex items-center transition ${
+                isTv
+                  ? 'gap-2.5 rounded-full border border-white/15 bg-[#121626]/95 py-1.5 pl-2 pr-4 text-white shadow-xl'
+                  : 'gap-2 rounded-xl border border-white/15 bg-white/[0.07] px-2.5 py-1.5 hover:border-violet-400/50 hover:bg-white/15'
               }`}
               title="Switch Profile or Manage Account"
             >
-              <div className="relative flex h-7 w-7 items-center justify-center rounded-full bg-gradient-to-br from-violet-500 to-fuchsia-500 text-xs font-bold">
+              <div
+                className={`relative flex items-center justify-center rounded-full bg-gradient-to-br from-violet-500 to-fuchsia-500 font-extrabold text-white ${
+                  isTv ? 'h-9 w-9 text-sm' : 'h-7 w-7 text-xs'
+                }`}
+              >
                 {session.username.charAt(0).toUpperCase()}
                 {session.isAdmin && !session.isDemo && (
-                  <Crown className="absolute -top-1.5 -right-1.5 h-3 w-3 text-amber-400 drop-shadow" />
+                  <Crown
+                    className={`absolute -top-1.5 -right-1.5 text-amber-400 drop-shadow ${
+                      isTv ? 'h-4 w-4' : 'h-3 w-3'
+                    }`}
+                  />
                 )}
               </div>
-              <span className="hidden sm:inline text-xs font-semibold text-zinc-100 max-w-[110px] truncate">
+              <span
+                className={`truncate font-bold ${
+                  isTv
+                    ? 'text-sm max-w-[140px]'
+                    : 'hidden sm:inline text-xs font-semibold text-zinc-100 max-w-[110px]'
+                }`}
+              >
                 {session.username}
               </span>
             </button>
@@ -207,10 +266,19 @@ export const Navbar: React.FC<NavbarProps> = ({
                   className="fixed inset-0 z-40"
                   onClick={() => setProfileMenuOpen(false)}
                 />
-                <div className="absolute right-0 mt-2 z-50 w-56 rounded-2xl border border-white/15 bg-surface/95 p-2 shadow-2xl backdrop-blur-xl">
-                  <div className="border-b border-white/10 px-3 py-2">
-                    <p className="truncate text-sm font-bold text-white">{session.username}</p>
-                    <p className="text-[11px] text-zinc-400">
+                <div
+                  data-tv-scope={isTv ? 'modal' : undefined}
+                  className={`absolute right-0 mt-2.5 z-50 rounded-2xl border border-white/20 shadow-2xl ${
+                    isTv
+                      ? 'w-72 bg-[#101320] p-3'
+                      : 'w-56 bg-surface/95 p-2 backdrop-blur-xl'
+                  }`}
+                >
+                  <div className="border-b border-white/10 px-3 py-2.5">
+                    <p className={`truncate font-bold text-white ${isTv ? 'text-base' : 'text-sm'}`}>
+                      {session.username}
+                    </p>
+                    <p className={isTv ? 'text-xs text-zinc-400 mt-0.5' : 'text-[11px] text-zinc-400'}>
                       {session.isDemo
                         ? 'Demo Preview'
                         : session.isAdmin
@@ -219,27 +287,34 @@ export const Navbar: React.FC<NavbarProps> = ({
                     </p>
                   </div>
 
-                  <div className="mt-1 space-y-0.5">
+                  <div className="mt-1.5 space-y-1">
                     <button
+                      data-tv-default-focus={isTv ? 'true' : undefined}
+                      data-tv-pill={isTv ? 'true' : undefined}
                       onClick={() => {
                         setProfileMenuOpen(false);
                         onSwitchProfile();
                       }}
-                      className="flex w-full items-center gap-2.5 rounded-xl px-3 py-2 text-left text-xs font-semibold text-zinc-200 transition hover:bg-white/10 hover:text-white"
+                      className={`flex w-full items-center gap-3 rounded-xl px-3.5 text-left font-bold text-zinc-100 transition hover:bg-white/10 hover:text-white ${
+                        isTv ? 'py-3 text-sm' : 'py-2 text-xs font-semibold text-zinc-200'
+                      }`}
                     >
-                      <Users className="h-4 w-4 text-violet-400" />
+                      <Users className={isTv ? 'h-5 w-5 text-violet-400' : 'h-4 w-4 text-violet-400'} />
                       Switch Profile
                     </button>
 
                     {session.isAdmin && !session.isDemo && (
                       <button
+                        data-tv-pill={isTv ? 'true' : undefined}
                         onClick={() => {
                           setProfileMenuOpen(false);
                           onTabChange('family');
                         }}
-                        className="flex w-full items-center gap-2.5 rounded-xl px-3 py-2 text-left text-xs font-semibold text-amber-200 transition hover:bg-amber-500/15"
+                        className={`flex w-full items-center gap-3 rounded-xl px-3.5 text-left font-bold text-amber-200 transition hover:bg-amber-500/15 ${
+                          isTv ? 'py-3 text-sm' : 'py-2 text-xs font-semibold'
+                        }`}
                       >
-                        <Crown className="h-4 w-4 text-amber-400" />
+                        <Crown className={isTv ? 'h-5 w-5 text-amber-400' : 'h-4 w-4 text-amber-400'} />
                         Manage Family Accounts
                       </button>
                     )}
@@ -258,18 +333,25 @@ export const Navbar: React.FC<NavbarProps> = ({
                     )}
 
                     <button
+                      data-tv-pill={isTv ? 'true' : undefined}
                       onClick={() => {
                         setProfileMenuOpen(false);
                         onSignOut();
                       }}
-                      className="flex w-full items-center gap-2.5 rounded-xl px-3 py-2 text-left text-xs font-semibold text-red-300 transition hover:bg-red-500/15"
+                      className={`flex w-full items-center gap-3 rounded-xl px-3.5 text-left font-bold text-red-300 transition hover:bg-red-500/15 ${
+                        isTv ? 'py-3 text-sm' : 'py-2 text-xs font-semibold'
+                      }`}
                     >
-                      <LogOut className="h-4 w-4" />
+                      <LogOut className={isTv ? 'h-5 w-5' : 'h-4 w-4'} />
                       Sign Out
                     </button>
                   </div>
 
-                  <div className="mt-1.5 border-t border-white/10 px-3 pt-1.5 text-[10px] text-zinc-500">
+                  <div
+                    className={`mt-2 border-t border-white/10 px-3 pt-2 text-zinc-500 ${
+                      isTv ? 'text-xs' : 'text-[10px]'
+                    }`}
+                  >
                     Qualiadept Stream v{APP_VERSION_NAME}
                   </div>
                 </div>

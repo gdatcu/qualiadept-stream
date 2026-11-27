@@ -2541,23 +2541,32 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
       {/* Top Overlay Bar */}
       <div
         data-tv-row="top"
-        className={`absolute top-0 left-0 right-0 z-20 flex items-center justify-between gap-3 bg-gradient-to-b from-black/85 to-transparent px-3 pt-[max(0.75rem,var(--app-safe-top))] pb-6 sm:px-6 sm:py-5 transition-opacity duration-300 ${
-          showControls ? 'opacity-100' : 'opacity-0 pointer-events-none'
-        }`}
+        className={`absolute top-0 left-0 right-0 z-20 flex items-center justify-between gap-3 bg-gradient-to-b from-black/90 to-transparent transition-opacity duration-300 ${
+          isTv
+            ? 'px-[3.8vw] py-6'
+            : 'px-3 pt-[max(0.75rem,var(--app-safe-top))] pb-6 sm:px-6 sm:py-5'
+        } ${showControls ? 'opacity-100' : 'opacity-0 pointer-events-none'}`}
       >
         <button
           ref={backBtnRef}
+          data-tv-pill={isTv ? 'true' : undefined}
           onClick={onClose}
-          className="flex flex-shrink-0 items-center gap-2 rounded-xl bg-white/10 px-3 py-2 text-xs sm:text-sm font-semibold text-white backdrop-blur-md transition hover:bg-white/20 focus:outline-none focus:ring-4 focus:ring-violet-400"
+          className={
+            isTv
+              ? 'flex flex-shrink-0 items-center gap-2.5 rounded-full border border-white/25 bg-[#141828]/95 px-5 py-2.5 text-sm font-bold text-white shadow-xl'
+              : 'flex flex-shrink-0 items-center gap-2 rounded-xl bg-white/10 px-3 py-2 text-xs sm:text-sm font-semibold text-white backdrop-blur-md transition hover:bg-white/20 focus:outline-none focus:ring-4 focus:ring-violet-400'
+          }
         >
-          <ArrowLeft className="h-4 w-4" />
+          <ArrowLeft className={isTv ? 'h-5 w-5' : 'h-4 w-4'} />
           <span>Back</span>
         </button>
 
         <div className="min-w-0 text-right">
-          <h2 className="truncate text-sm sm:text-base font-bold text-white">{item.name}</h2>
+          <h2 className={`truncate font-extrabold text-white ${isTv ? 'text-xl' : 'text-sm sm:text-base font-bold'}`}>
+            {item.name}
+          </h2>
           {item.seriesName && (
-            <p className="truncate text-[11px] sm:text-xs text-zinc-400">
+            <p className={`truncate text-zinc-300 ${isTv ? 'text-sm mt-0.5' : 'text-[11px] sm:text-xs text-zinc-400'}`}>
               {item.seriesName} · S{item.seasonNumber}E{item.episodeNumber}
             </p>
           )}
@@ -2577,18 +2586,20 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
 
       {/* Bottom Controls (z-40 sits ABOVE the z-30 mobile menu backdrop so bottom sheets are 100% clickable!) */}
       <div
-        className={`absolute bottom-0 left-0 right-0 z-40 bg-gradient-to-t from-black/95 via-black/75 to-transparent px-3 pb-[max(0.75rem,var(--app-safe-bottom))] pt-10 sm:px-6 sm:pb-6 sm:pt-12 transition-opacity duration-300 ${
-          showControls || isCasting ? 'opacity-100' : 'opacity-0 pointer-events-none'
-        }`}
+        className={`absolute bottom-0 left-0 right-0 z-40 bg-gradient-to-t from-black/95 via-black/80 to-transparent transition-opacity duration-300 ${
+          isTv
+            ? 'px-[3.8vw] pb-8 pt-14'
+            : 'px-3 pb-[max(0.75rem,var(--app-safe-bottom))] pt-10 sm:px-6 sm:pb-6 sm:pt-12'
+        } ${showControls || isCasting ? 'opacity-100' : 'opacity-0 pointer-events-none'}`}
       >
         {/* Optional Current Chapter Label */}
         {currentChapter && chapters.length > 1 && (
-          <div className="mb-1 flex items-center justify-between px-1 text-[11px] font-semibold text-zinc-300">
-            <span className="truncate max-w-[70%] text-violet-200/90">
+          <div className={`mb-1.5 flex items-center justify-between px-1 font-semibold text-zinc-300 ${isTv ? 'text-sm' : 'text-[11px]'}`}>
+            <span className="truncate max-w-[70%] text-zinc-100">
               {currentChapter.name}
             </span>
             {playbackSpeed !== 1 && (
-              <span className="rounded bg-violet-500/25 px-1.5 py-0.5 font-mono text-[10px] font-bold text-violet-200">
+              <span className="rounded bg-white/15 px-2 py-0.5 font-mono text-xs font-bold text-white">
                 {playbackSpeed}x
               </span>
             )}
@@ -2596,15 +2607,15 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
         )}
 
         {/* 3-Layer Colored Timeline Progress Bar (Elapsed Gradient + Buffered Cushion + Chapter Ticks) */}
-        <div data-tv-row="timeline" className="mb-3 sm:mb-4 flex items-center gap-2.5 sm:gap-3.5">
-          <span className="w-11 sm:w-14 text-[11px] sm:text-xs font-mono font-bold text-fuchsia-300 tabular-nums">
+        <div data-tv-row="timeline" className={`flex items-center ${isTv ? 'mb-5 gap-4' : 'mb-3 sm:mb-4 gap-2.5 sm:gap-3.5'}`}>
+          <span className={`font-mono font-bold text-white tabular-nums ${isTv ? 'w-16 text-sm' : 'w-11 sm:w-14 text-[11px] sm:text-xs text-fuchsia-300'}`}>
             {formatTime(displayCurrentTime)}
           </span>
           <div className="group/timeline relative flex flex-1 items-center py-2">
             {/* Visual 3-layer bar */}
             <div
-              className={`relative w-full overflow-hidden rounded-full bg-white/20 transition-all ${
-                isTv ? 'h-2.5' : 'h-1.5 group-hover/timeline:h-2'
+              className={`relative w-full overflow-hidden rounded-full bg-white/25 transition-all ${
+                isTv ? 'h-3' : 'h-1.5 group-hover/timeline:h-2'
               }`}
             >
               {/* Buffered Ahead Range */}
@@ -2612,9 +2623,13 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
                 className="absolute inset-y-0 left-0 rounded-full bg-white/35 transition-all duration-300"
                 style={{ width: `${bufferedPct}%` }}
               />
-              {/* Elapsed Time Gradient Fill */}
+              {/* Elapsed Time Fill */}
               <div
-                className="absolute inset-y-0 left-0 rounded-full bg-gradient-to-r from-violet-500 via-fuchsia-500 to-pink-400 shadow-[0_0_12px_rgba(217,70,239,0.75)]"
+                className={
+                  isTv
+                    ? 'absolute inset-y-0 left-0 rounded-full bg-white'
+                    : 'absolute inset-y-0 left-0 rounded-full bg-gradient-to-r from-violet-500 via-fuchsia-500 to-pink-400 shadow-[0_0_12px_rgba(217,70,239,0.75)]'
+                }
                 style={{ width: `${playedPct}%` }}
               />
               {/* Chapter Marker Ticks */}
@@ -2632,10 +2647,12 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
                   );
                 })}
             </div>
-            {/* Glowing Scrubber Handle */}
+            {/* Scrubber Handle */}
             <div
-              className={`pointer-events-none absolute top-1/2 -translate-x-1/2 -translate-y-1/2 rounded-full border-2 border-white bg-fuchsia-400 shadow-[0_0_10px_rgba(217,70,239,0.9)] transition-transform group-hover/timeline:scale-125 ${
-                isTv ? 'h-4 w-4' : 'h-3.5 w-3.5'
+              className={`pointer-events-none absolute top-1/2 -translate-x-1/2 -translate-y-1/2 rounded-full border-2 border-white transition-transform group-hover/timeline:scale-125 ${
+                isTv
+                  ? 'h-5 w-5 bg-white shadow-lg'
+                  : 'h-3.5 w-3.5 bg-fuchsia-400 shadow-[0_0_10px_rgba(217,70,239,0.9)]'
               }`}
               style={{ left: `${playedPct}%` }}
             />
@@ -2669,74 +2686,104 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
               className="absolute inset-0 h-full w-full cursor-pointer appearance-none rounded-full bg-transparent [&::-webkit-slider-thumb]:h-4 [&::-webkit-slider-thumb]:w-4 [&::-webkit-slider-thumb]:appearance-none [&::-webkit-slider-thumb]:opacity-0 [&::-moz-range-thumb]:h-4 [&::-moz-range-thumb]:w-4 [&::-moz-range-thumb]:border-0 [&::-moz-range-thumb]:opacity-0"
             />
           </div>
-          <span className="w-11 sm:w-14 text-right text-[11px] sm:text-xs font-mono text-zinc-400 tabular-nums">
+          <span className={`text-right font-mono text-zinc-300 tabular-nums ${isTv ? 'w-16 text-sm' : 'w-11 sm:w-14 text-[11px] sm:text-xs text-zinc-400'}`}>
             {formatTime(displayDuration)}
           </span>
         </div>
 
         {/* Control Buttons */}
-        <div data-tv-row="bottom" className="flex items-center justify-between gap-1 sm:gap-2">
-          <div className="flex items-center gap-1 sm:gap-2 min-w-0">
+        <div data-tv-row="bottom" className="flex items-center justify-between gap-2">
+          <div className={`flex items-center min-w-0 ${isTv ? 'gap-3' : 'gap-1 sm:gap-2'}`}>
             <button
               type="button"
+              data-tv-pill={isTv ? 'true' : undefined}
               onClick={(e) => {
                 e.stopPropagation();
                 togglePlay();
               }}
               aria-label={displayPlaying ? 'Pause' : 'Play'}
-              className="flex h-9 w-9 sm:h-10 sm:w-10 flex-shrink-0 items-center justify-center rounded-full bg-white text-obsidian transition hover:scale-105 focus:outline-none focus:ring-4 focus:ring-violet-400"
+              className={`flex flex-shrink-0 items-center justify-center rounded-full bg-white text-obsidian transition ${
+                isTv
+                  ? 'h-14 w-14 shadow-2xl'
+                  : 'h-9 w-9 sm:h-10 sm:w-10 hover:scale-105 focus:outline-none focus:ring-4 focus:ring-violet-400'
+              }`}
             >
               {displayPlaying ? (
-                <Pause className="h-4 w-4 sm:h-5 sm:w-5 fill-obsidian" />
+                <Pause className={isTv ? 'h-7 w-7 fill-obsidian' : 'h-4 w-4 sm:h-5 sm:w-5 fill-obsidian'} />
               ) : (
-                <Play className="h-4 w-4 sm:h-5 sm:w-5 fill-obsidian ml-0.5" />
+                <Play className={isTv ? 'h-7 w-7 fill-obsidian ml-0.5' : 'h-4 w-4 sm:h-5 sm:w-5 fill-obsidian ml-0.5'} />
               )}
             </button>
 
             {chapters.length > 1 && (
               <button
+                data-tv-pill={isTv ? 'true' : undefined}
                 onClick={() => jumpToChapter('prev')}
                 title="Previous chapter"
-                className="hidden sm:inline-flex rounded-lg p-1.5 sm:p-2 text-zinc-200 transition hover:bg-white/10 focus:outline-none focus:ring-2 focus:ring-violet-400"
+                className={
+                  isTv
+                    ? 'inline-flex rounded-full border border-white/20 bg-[#141828]/95 p-3 text-zinc-100'
+                    : 'hidden sm:inline-flex rounded-lg p-1.5 sm:p-2 text-zinc-200 transition hover:bg-white/10 focus:outline-none focus:ring-2 focus:ring-violet-400'
+                }
               >
-                <SkipBack className="h-4 w-4 sm:h-5 sm:w-5" />
+                <SkipBack className={isTv ? 'h-6 w-6' : 'h-4 w-4 sm:h-5 sm:w-5'} />
               </button>
             )}
 
             <button
+              data-tv-pill={isTv ? 'true' : undefined}
               onClick={() => seekBy(-10)}
               title="Back 10s"
-              className="hidden xs:inline-flex sm:inline-flex rounded-lg p-1.5 sm:p-2 text-zinc-200 transition hover:bg-white/10 focus:outline-none focus:ring-2 focus:ring-violet-400"
+              className={
+                isTv
+                  ? 'inline-flex rounded-full border border-white/20 bg-[#141828]/95 p-3 text-zinc-100'
+                  : 'hidden xs:inline-flex sm:inline-flex rounded-lg p-1.5 sm:p-2 text-zinc-200 transition hover:bg-white/10 focus:outline-none focus:ring-2 focus:ring-violet-400'
+              }
             >
-              <RotateCcw className="h-4 w-4 sm:h-5 sm:w-5" />
+              <RotateCcw className={isTv ? 'h-6 w-6' : 'h-4 w-4 sm:h-5 sm:w-5'} />
             </button>
 
             <button
+              data-tv-pill={isTv ? 'true' : undefined}
               onClick={() => seekBy(10)}
               title="Forward 10s"
-              className="hidden xs:inline-flex sm:inline-flex rounded-lg p-1.5 sm:p-2 text-zinc-200 transition hover:bg-white/10 focus:outline-none focus:ring-2 focus:ring-violet-400"
+              className={
+                isTv
+                  ? 'inline-flex rounded-full border border-white/20 bg-[#141828]/95 p-3 text-zinc-100'
+                  : 'hidden xs:inline-flex sm:inline-flex rounded-lg p-1.5 sm:p-2 text-zinc-200 transition hover:bg-white/10 focus:outline-none focus:ring-2 focus:ring-violet-400'
+              }
             >
-              <RotateCw className="h-4 w-4 sm:h-5 sm:w-5" />
+              <RotateCw className={isTv ? 'h-6 w-6' : 'h-4 w-4 sm:h-5 sm:w-5'} />
             </button>
 
             {chapters.length > 1 && (
               <button
+                data-tv-pill={isTv ? 'true' : undefined}
                 onClick={() => jumpToChapter('next')}
                 title="Next chapter"
-                className="hidden sm:inline-flex rounded-lg p-1.5 sm:p-2 text-zinc-200 transition hover:bg-white/10 focus:outline-none focus:ring-2 focus:ring-violet-400"
+                className={
+                  isTv
+                    ? 'inline-flex rounded-full border border-white/20 bg-[#141828]/95 p-3 text-zinc-100'
+                    : 'hidden sm:inline-flex rounded-lg p-1.5 sm:p-2 text-zinc-200 transition hover:bg-white/10 focus:outline-none focus:ring-2 focus:ring-violet-400'
+                }
               >
-                <SkipForward className="h-4 w-4 sm:h-5 sm:w-5" />
+                <SkipForward className={isTv ? 'h-6 w-6' : 'h-4 w-4 sm:h-5 sm:w-5'} />
               </button>
             )}
 
             {nextEpisode && onPlayNext && (
               <button
+                data-tv-pill={isTv ? 'true' : undefined}
                 onClick={() => onPlayNext(nextEpisode)}
                 title={`Next: ${nextEpisode.name}`}
-                className="flex items-center gap-1 rounded-lg bg-white/10 px-2 py-1.5 sm:px-3 text-xs font-semibold text-white transition hover:bg-white/20 focus:outline-none focus:ring-2 focus:ring-violet-400"
+                className={
+                  isTv
+                    ? 'flex items-center gap-2 rounded-full border border-white/25 bg-[#141828]/95 px-5 py-3 text-sm font-bold text-white shadow-xl'
+                    : 'flex items-center gap-1 rounded-lg bg-white/10 px-2 py-1.5 sm:px-3 text-xs font-semibold text-white transition hover:bg-white/20 focus:outline-none focus:ring-2 focus:ring-violet-400'
+                }
               >
-                <SkipForward className="h-4 w-4" />
-                <span className="hidden sm:inline">Next Ep</span>
+                <SkipForward className={isTv ? 'h-5 w-5' : 'h-4 w-4'} />
+                <span className={isTv ? 'inline' : 'hidden sm:inline'}>Next Episode</span>
               </button>
             )}
 
@@ -2814,11 +2861,12 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
             )}
           </div>
 
-          <div className="relative flex items-center gap-1.5 sm:gap-2 flex-shrink-0">
+          <div className={`relative flex items-center flex-shrink-0 ${isTv ? 'gap-3' : 'gap-1.5 sm:gap-2'}`}>
             {/* Visual Chapters Drawer Button */}
             {chapters.length > 1 && (
               <div className="relative">
                 <button
+                  data-tv-pill={isTv ? 'true' : undefined}
                   onClick={() => {
                     setShowChaptersMenu(!showChaptersMenu);
                     setShowQualityMenu(false);
@@ -2826,19 +2874,23 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
                     bumpControls();
                   }}
                   title="Chapters"
-                  className={`flex items-center gap-1.5 rounded-xl transition hover:bg-white/25 focus:outline-none focus:ring-2 focus:ring-violet-400 ${
+                  className={
                     isTv
-                      ? 'bg-white/15 px-3.5 py-2 text-xs font-semibold'
-                      : 'p-1.5 sm:p-2 hover:bg-white/10'
-                  } ${showChaptersMenu ? 'text-violet-300 bg-white/15' : 'text-zinc-200'}`}
+                      ? 'flex items-center gap-2 rounded-full border border-white/20 bg-[#141828]/95 px-5 py-3 text-sm font-bold text-white shadow-xl'
+                      : `flex items-center gap-1.5 rounded-xl p-1.5 sm:p-2 transition hover:bg-white/10 focus:outline-none focus:ring-2 focus:ring-violet-400 ${
+                          showChaptersMenu ? 'text-violet-300 bg-white/15' : 'text-zinc-200'
+                        }`
+                  }
                 >
-                  <ListVideo className="h-4 w-4 sm:h-5 sm:w-5" />
+                  <ListVideo className={isTv ? 'h-5 w-5' : 'h-4 w-4 sm:h-5 sm:w-5'} />
                   {isTv && <span>Chapters</span>}
                 </button>
                 {showChaptersMenu && (
                   <div
                     data-tv-player-menu="true"
-                    className="fixed inset-x-3 bottom-20 z-40 max-h-[68dvh] overflow-y-auto rounded-2xl border border-white/20 bg-surface/95 p-3 shadow-2xl backdrop-blur-xl sm:absolute sm:inset-x-auto sm:bottom-16 sm:right-0 sm:w-96"
+                    className={`fixed inset-x-3 bottom-20 z-40 max-h-[68dvh] overflow-y-auto rounded-2xl border border-white/20 p-3 shadow-2xl sm:absolute sm:inset-x-auto sm:bottom-16 sm:right-0 sm:w-96 ${
+                      isTv ? 'bg-[#0e111d]' : 'bg-surface/95 backdrop-blur-xl'
+                    }`}
                   >
                     <div className="mb-2 flex items-center justify-between px-1">
                       <span className="text-[11px] font-bold uppercase tracking-wider text-zinc-300">
@@ -2915,17 +2967,26 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
             {/* Favorite Heart Toggle */}
             {onToggleFavorite && (
               <button
+                data-tv-pill={isTv ? 'true' : undefined}
                 onClick={() => {
                   onToggleFavorite(item);
                   bumpControls();
                 }}
                 title={item.isFavorite ? 'Remove from Favorites' : 'Add to Favorites'}
-                className={`rounded-lg p-1.5 sm:p-2 transition hover:bg-white/10 focus:outline-none focus:ring-2 focus:ring-violet-400 ${
-                  item.isFavorite ? 'text-rose-400' : 'text-zinc-200'
-                }`}
+                className={
+                  isTv
+                    ? `rounded-full border border-white/20 bg-[#141828]/95 p-3 shadow-xl ${
+                        item.isFavorite ? 'text-rose-400' : 'text-zinc-100'
+                      }`
+                    : `rounded-lg p-1.5 sm:p-2 transition hover:bg-white/10 focus:outline-none focus:ring-2 focus:ring-violet-400 ${
+                        item.isFavorite ? 'text-rose-400' : 'text-zinc-200'
+                      }`
+                }
               >
                 <Heart
-                  className={`h-4 w-4 sm:h-5 sm:w-5 ${item.isFavorite ? 'fill-rose-400' : ''}`}
+                  className={`${isTv ? 'h-5 w-5' : 'h-4 w-4 sm:h-5 sm:w-5'} ${
+                    item.isFavorite ? 'fill-rose-400' : ''
+                  }`}
                 />
               </button>
             )}
@@ -2934,6 +2995,7 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
             <div className="relative">
               <button
                 ref={qualityBtnRef}
+                data-tv-pill={isTv ? 'true' : undefined}
                 onClick={() => {
                   setShowQualityMenu(!showQualityMenu);
                   setShowSubMenu(false);
@@ -2941,20 +3003,22 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
                   bumpControls();
                 }}
                 title="Playback Settings"
-                className={`flex items-center gap-1.5 rounded-xl bg-white/15 font-semibold text-white transition hover:bg-white/25 focus:outline-none focus:ring-2 focus:ring-violet-400 ${
-                  isTv ? 'px-3.5 py-2 text-xs' : 'px-2 py-1.5 sm:px-2.5 text-[11px] sm:text-xs'
-                }`}
+                className={
+                  isTv
+                    ? 'flex items-center gap-2 rounded-full border border-white/20 bg-[#141828]/95 px-5 py-3 text-sm font-bold text-white shadow-xl'
+                    : 'flex items-center gap-1.5 rounded-xl bg-white/15 px-2 py-1.5 sm:px-2.5 text-[11px] sm:text-xs font-semibold text-white transition hover:bg-white/25 focus:outline-none focus:ring-2 focus:ring-violet-400'
+                }
               >
                 {offlineQualityLabel ? (
                   <>
-                    <HardDrive className="h-4 w-4 text-emerald-400" />
+                    <HardDrive className={isTv ? 'h-5 w-5 text-emerald-400' : 'h-4 w-4 text-emerald-400'} />
                     <span className="max-w-[96px] truncate sm:max-w-none">
                       Offline · {offlineQualityLabel}
                     </span>
                   </>
                 ) : (
                   <>
-                    <Settings className="h-4 w-4 text-violet-300" />
+                    <Settings className={isTv ? 'h-5 w-5' : 'h-4 w-4 text-violet-300'} />
                     <span className="max-w-[92px] truncate sm:max-w-none">
                       {autoStability
                         ? `${isTv ? 'Settings · ' : ''}Auto · ${activeQualityLabel.replace(' HD', '').replace(' SD', '')}`
@@ -2966,8 +3030,8 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
               {showQualityMenu && (
                 <div
                   data-tv-player-menu="true"
-                  className={`fixed inset-x-3 bottom-20 z-40 max-h-[68dvh] overflow-y-auto rounded-2xl border border-white/20 bg-surface/95 p-2.5 shadow-2xl backdrop-blur-xl sm:absolute sm:inset-x-auto sm:bottom-16 sm:right-0 sm:rounded-2xl ${
-                    isTv ? 'sm:w-96 p-3' : 'sm:w-72'
+                  className={`fixed inset-x-3 bottom-20 z-40 max-h-[68dvh] overflow-y-auto rounded-2xl border border-white/20 p-2.5 shadow-2xl sm:absolute sm:inset-x-auto sm:bottom-16 sm:right-0 sm:rounded-2xl ${
+                    isTv ? 'sm:w-96 bg-[#0e111d] p-3.5' : 'sm:w-72 bg-surface/95 backdrop-blur-xl'
                   }`}
                 >
                   {settingsPanel === 'root' && (
@@ -3238,25 +3302,30 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
               <div className="relative">
                 <button
                   ref={subBtnRef}
+                  data-tv-pill={isTv ? 'true' : undefined}
                   onClick={() => {
                     setShowSubMenu(!showSubMenu);
                     setShowQualityMenu(false);
                     bumpControls();
                   }}
                   title="Audio & Subtitles"
-                  className={`flex items-center gap-1.5 rounded-xl transition hover:bg-white/25 focus:outline-none focus:ring-2 focus:ring-violet-400 ${
+                  className={
                     isTv
-                      ? 'bg-white/15 px-3.5 py-2 text-xs font-semibold'
-                      : 'p-1.5 sm:p-2 hover:bg-white/10'
-                  } ${activeSubtitleIndex !== null ? 'text-violet-300' : 'text-white'}`}
+                      ? 'flex items-center gap-2 rounded-full border border-white/20 bg-[#141828]/95 px-5 py-3 text-sm font-bold text-white shadow-xl'
+                      : `flex items-center gap-1.5 rounded-xl p-1.5 sm:p-2 transition hover:bg-white/10 focus:outline-none focus:ring-2 focus:ring-violet-400 ${
+                          activeSubtitleIndex !== null ? 'text-violet-300' : 'text-white'
+                        }`
+                  }
                 >
-                  <Subtitles className="h-4 w-4 sm:h-5 sm:w-5" />
+                  <Subtitles className={isTv ? 'h-5 w-5' : 'h-4 w-4 sm:h-5 sm:w-5'} />
                   {isTv && <span>Audio &amp; Subtitles</span>}
                 </button>
                 {showSubMenu && (
                   <div
                     data-tv-player-menu="true"
-                    className={`fixed inset-x-3 bottom-20 z-40 max-h-[68dvh] overflow-y-auto rounded-2xl border border-white/20 bg-surface/95 p-3 shadow-2xl backdrop-blur-xl sm:absolute sm:inset-x-auto sm:bottom-16 sm:right-0 sm:max-h-[70vh] sm:rounded-2xl sm:p-3 ${
+                    className={`fixed inset-x-3 bottom-20 z-40 max-h-[68dvh] overflow-y-auto rounded-2xl border border-white/20 p-3 shadow-2xl sm:absolute sm:inset-x-auto sm:bottom-16 sm:right-0 sm:max-h-[70vh] sm:rounded-2xl sm:p-3 ${
+                      isTv ? 'bg-[#0e111d]' : 'bg-surface/95 backdrop-blur-xl'
+                    } ${
                       playback.audioTracks.length > 0 && playback.subtitles.length > 0
                         ? 'grid grid-cols-1 gap-3 sm:w-[36rem] sm:max-w-[calc(100vw-2rem)] sm:grid-cols-2'
                         : 'sm:w-80'

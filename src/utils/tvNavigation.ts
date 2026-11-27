@@ -99,6 +99,15 @@ function focusAndScrollIntoView(el: HTMLElement, horizontalOnly = false) {
       row.scrollLeft = Math.max(0, Math.min(row.scrollWidth - row.clientWidth, targetLeft));
     }
     if (!horizontalOnly) {
+      const modal = el.closest('[data-tv-scope="modal"]') as HTMLElement | null;
+      if (modal && el.closest('[data-tv-modal-top="true"]')) {
+        modal.scrollTop = 0;
+        return;
+      }
+      if (!modal && (el.closest('[data-tv-hero="true"]') || el.closest('header'))) {
+        window.scrollTo(0, 0);
+        return;
+      }
       el.scrollIntoView({
         behavior: 'auto',
         block: 'center',
