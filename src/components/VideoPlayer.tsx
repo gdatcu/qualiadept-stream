@@ -61,6 +61,7 @@ import {
 } from '../utils/chromecast';
 import {
   clearStableCeiling,
+  formatResolutionBadge,
   getNetworkLabel,
   getNextLowerQuality,
   getRecommendedQuality,
@@ -172,7 +173,9 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
   const swipeStartRef = useRef<{ y: number; startBrightness: number; moved: boolean } | null>(null);
   const brightnessHudTimerRef = useRef<number | null>(null);
   const adaptiveNoticeTimerRef = useRef<number | null>(null);
-  const manualQualityLockedRef = useRef(false);
+  const manualQualityLockedRef = useRef(isTv);
+  const openedQualityDirectlyRef = useRef(false);
+  const tvDirectQualityBtnRef = useRef<HTMLButtonElement>(null);
   const lastAdaptTsRef = useRef(0);
   const lastSeekTsRef = useRef(0);
   const streamStartedAtRef = useRef(0);
@@ -183,14 +186,18 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
   const nextPrefetchedIdRef = useRef<string | null>(null);
   const offlineRevokeRef = useRef<(() => void) | null>(null);
 
-  const [quality, setQuality] = useState<QualityPreset>(() => getRecommendedQuality());
-  const [autoStability, setAutoStability] = useState(true);
+  const [quality, setQuality] = useState<QualityPreset>(() =>
+    isTv ? 'auto' : getRecommendedQuality()
+  );
+  const [autoStability, setAutoStability] = useState(() => !isTv);
   const [bufferAheadSec, setBufferAheadSec] = useState(0);
   const [bufferedEndSec, setBufferedEndSec] = useState(0);
   const [networkLabel, setNetworkLabel] = useState(() => getNetworkLabel());
   const [offlineQualityLabel, setOfflineQualityLabel] = useState<string | null>(null);
   const [forceHls, setForceHls] = useState(false);
+  const [disableHevcFmp4, setDisableHevcFmp4] = useState(false);
   const [useNativeHls, setUseNativeHls] = useState(false);
+  const [decodedSize, setDecodedSize] = useState<{ width: number; height: number } | null>(null);
   const [streamStatus, setStreamStatus] = useState<string | null>(null);
   const [adaptiveNotice, setAdaptiveNotice] = useState<string | null>(null);
   const [playback, setPlayback] = useState<PlaybackInfo | null>(null);
@@ -412,7 +419,12 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
 
       const currentQ = qualityRef.current;
       const nextQ =
-        targetOverride ?? getNextLowerQuality(currentQ, playbackRef.current?.sourceBitrate);
+        targetOverride ??
+        getNextLowerQuality(
+          currentQ,
+          playbackRef.current?.sourceBitrate,
+          playbackRef.current?.sourceWidth
+        );
       if (!nextQ || qualityRank(nextQ) >= qualityRank(currentQ)) return false;
 
       lastAdaptTsRef.current = now;
@@ -482,7 +494,9 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
     setSubtitleCues([]);
     setLoadingSubtitles(false);
     setForceHls(false);
+    setDisableHevcFmp4(false);
     setUseNativeHls(false);
+    setDecodedSize(null);
     setChapters([]);
     setShowChaptersMenu(false);
     setSubtitleOffsetSec(0);
@@ -557,6 +571,7 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
   // Reset Settings menu back to root panel whenever closed
   useEffect(() => {
     if (!showQualityMenu) {
+      openedQualityDirectlyRef.current = false;
       setSettingsPanel('root');
     }
   }, [showQualityMenu]);
@@ -568,6 +583,7 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
     offlineRevokeRef.current = null;
     setOfflineQualityLabel(null);
     setPlayback(null);
+    setDecodedSize(null);
     setLoading(true);
     setBuffering(false);
     setSlowBuffering(false);
@@ -580,7 +596,7 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
 
     const tryLoad = async () => {
       const canUseOffline =
-        !manualQualityLockedRef.current &&
+        (quality === 'auto' || !manualQualityLockedRef.current) &&
         selectedAudioIndex === null &&
         burnInSubIndex === null &&
         !forceHls;
@@ -604,6 +620,7 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
         audioStreamIndex: selectedAudioIndex,
         burnInSubtitleIndex: burnInSubIndex,
         forceHls,
+        disableHevcFmp4,
         bypassCache: retryNonce > 0,
       });
       if (active) {
@@ -624,7 +641,7 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
       offlineRevokeRef.current?.();
       offlineRevokeRef.current = null;
     };
-  }, [session, item, quality, selectedAudioIndex, burnInSubIndex, forceHls, retryNonce]);
+  }, [session, item, quality, selectedAudioIndex, burnInSubIndex, forceHls, disableHevcFmp4, retryNonce]);
 
   // Attach HLS.js (with Android WebView inline demuxer + automatic Native HLS fallback) or native video source
   useEffect(() => {
@@ -750,13 +767,18 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
         const stats = data.frag?.stats;
         if (!stats) return;
         const bytes = stats.loaded || 0;
-        // Measure ONLY body transfer duration (end - first), excluding server FFmpeg TTFB wait
+        const startLoad = stats.loading?.start || 0;
         const firstByte = stats.loading?.first || 0;
         const endByte = stats.loading?.end || 0;
         const transferMs = endByte - firstByte;
-        if (bytes >= 60_000 && firstByte > 0 && transferMs >= 20) {
+        const totalLoadMs = startLoad > 0 ? endByte - startLoad : transferMs;
+        const fragDurationSec = data.frag?.duration || 4;
+        // Only sample segments >= 750 KB so small static/cartoon segments never mimic slow 3G/4G pipes
+        if (bytes >= 750_000 && firstByte > 0 && transferMs >= 25) {
           const sampleMbps = (bytes * 8) / (transferMs / 1000) / 1_000_000;
-          recordMeasuredThroughput(sampleMbps);
+          const isRealtimeHealthy =
+            fragDurationSec > 0 && totalLoadMs > 0 && (fragDurationSec * 1000) / totalLoadMs >= 1.6;
+          recordMeasuredThroughput(sampleMbps, { isRealtimeHealthy });
         }
       });
 
@@ -791,8 +813,13 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
             data.details === Hls.ErrorDetails.BUFFER_APPEND_ERROR ||
             data.details === Hls.ErrorDetails.FRAG_PARSING_ERROR
           ) {
+            if (playback.streamUrl.includes('SegmentContainer=mp4') && !hasStartedPlayingRef.current) {
+              setStreamStatus('Switching to compatible H.264 stream...');
+              setDisableHevcFmp4(true);
+              return;
+            }
             if (canNativeHls && !hasStartedPlayingRef.current) {
-              setStreamStatus('Switching to native Android player...');
+              setStreamStatus('Switching to native hardware player...');
               setUseNativeHls(true);
               return;
             }
@@ -808,7 +835,7 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
             const detail = httpCode ? `HTTP ${httpCode}` : 'timeout';
             setStreamStatus(`Segment retry #${initialFragFailures} (${detail})...`);
             if (!hasStartedPlayingRef.current && initialFragFailures >= 2 && canNativeHls) {
-              setStreamStatus('Switching to native Android player...');
+              setStreamStatus('Switching to native hardware player...');
               setUseNativeHls(true);
             }
           }
@@ -846,6 +873,12 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
           return;
         }
 
+        if (data.type === Hls.ErrorTypes.MEDIA_ERROR && playback.streamUrl.includes('SegmentContainer=mp4')) {
+          setStreamStatus('Switching to compatible H.264 stream...');
+          setDisableHevcFmp4(true);
+          return;
+        }
+
         if (data.type === Hls.ErrorTypes.MEDIA_ERROR && mediaRetries < 2) {
           mediaRetries += 1;
           setStreamStatus('Recovering media buffer...');
@@ -854,9 +887,9 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
           return;
         }
 
-        // Last-resort automatic fallback to Android/Safari native hardware HLS before showing error screen
+        // Last-resort automatic fallback to native hardware HLS before showing error screen
         if (canNativeHls && !useNativeHls) {
-          setStreamStatus('Switching to native Android player...');
+          setStreamStatus('Switching to native hardware player...');
           setUseNativeHls(true);
           return;
         }
@@ -1089,7 +1122,7 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
           video.play().catch(() => {});
         }
       },
-      loading ? 7000 : 3500
+      loading ? (isTv || quality === 'auto' ? 12_000 : 7000) : 3500
     );
 
     // Secondary startup recovery at 12s: if HLS.js still has 0 buffered seconds, try Android Native HLS or lower quality
@@ -1395,9 +1428,9 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
   const showControlsRef = useRef(showControls);
   showControlsRef.current = showControls;
 
-  // Auto-focus inside Quality / Subtitles menus when opened on TV
+  // Auto-focus inside Quality / Subtitles / Chapters menus (and sub-panels) when opened on TV
   useEffect(() => {
-    if (!showSubMenu && !showQualityMenu) return;
+    if (!showSubMenu && !showQualityMenu && !showChaptersMenu) return;
     const raf = window.requestAnimationFrame(() => {
       const firstMenuBtn = document.querySelector(
         '[data-tv-player-menu="true"] button:not([disabled])'
@@ -1405,11 +1438,11 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
       firstMenuBtn?.focus();
     });
     return () => window.cancelAnimationFrame(raf);
-  }, [showSubMenu, showQualityMenu]);
+  }, [showSubMenu, showQualityMenu, showChaptersMenu, settingsPanel]);
 
   // Auto-focus Play/Pause (or Back while loading) when controls wake on TV
   useEffect(() => {
-    if (!isTv || !showControls || showSubMenu || showQualityMenu) return;
+    if (!isTv || !showControls || showSubMenu || showQualityMenu || showChaptersMenu) return;
     const raf = window.requestAnimationFrame(() => {
       const active = document.activeElement as HTMLElement | null;
       const inPlayer = active && containerRef.current?.contains(active) && active !== containerRef.current;
@@ -1418,7 +1451,7 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
       }
     });
     return () => window.cancelAnimationFrame(raf);
-  }, [isTv, showControls, showSubMenu, showQualityMenu, loading, buffering]);
+  }, [isTv, showControls, showSubMenu, showQualityMenu, showChaptersMenu, loading, buffering]);
 
   // Keyboard & Samsung Smart TV SolarCell remote shortcuts
   useEffect(() => {
@@ -1429,10 +1462,20 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
       const isBackKey = e.key === 'Escape' || e.keyCode === 10009 || e.key === 'XF86Back';
       if (isBackKey) {
         e.preventDefault();
-        if (showSubMenu || showQualityMenu) {
-          const restoreTarget = showQualityMenu ? qualityBtnRef.current : subBtnRef.current;
+        if (showQualityMenu && settingsPanel !== 'root' && !openedQualityDirectlyRef.current) {
+          setSettingsPanel('root');
+          bumpControls();
+          return;
+        }
+        if (showSubMenu || showQualityMenu || showChaptersMenu) {
+          const restoreTarget = showQualityMenu
+            ? openedQualityDirectlyRef.current
+              ? tvDirectQualityBtnRef.current || qualityBtnRef.current
+              : qualityBtnRef.current
+            : subBtnRef.current;
           setShowSubMenu(false);
           setShowQualityMenu(false);
+          setShowChaptersMenu(false);
           bumpControls();
           window.requestAnimationFrame(() => {
             (restoreTarget || centerPlayBtnRef.current || backBtnRef.current)?.focus();
@@ -1535,6 +1578,8 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
     onPlayNext,
     showSubMenu,
     showQualityMenu,
+    showChaptersMenu,
+    settingsPanel,
     togglePlay,
     pauseVideo,
     resumeVideo,
@@ -1607,6 +1652,7 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
     manualQualityLockedRef.current = true;
     setAutoStability(false);
     setForceHls(false);
+    setDisableHevcFmp4(false);
     setUseNativeHls(false);
     if (nextQuality === quality) {
       setShowQualityMenu(false);
@@ -1627,6 +1673,7 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
     manualQualityLockedRef.current = false;
     setAutoStability(true);
     setForceHls(false);
+    setDisableHevcFmp4(false);
     setUseNativeHls(false);
     clearStableCeiling();
     setShowQualityMenu(false);
@@ -1876,6 +1923,87 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
     Boolean(playback && (playback.audioTracks.length > 0 || playback.subtitles.length > 0));
   const activeQualityLabel =
     QUALITY_OPTIONS.find((q) => q.id === quality)?.label || 'Original';
+
+  // Live verified resolution & play method from actual decoded <video> frames + Jellyfin MediaSource
+  const syncDecodedVideoSize = () => {
+    const v = videoRef.current;
+    if (!v || !v.videoWidth || !v.videoHeight) return;
+    setDecodedSize((prev) =>
+      prev && prev.width === v.videoWidth && prev.height === v.videoHeight
+        ? prev
+        : { width: v.videoWidth, height: v.videoHeight }
+    );
+  };
+
+  const sourceResBadge = formatResolutionBadge(playback?.sourceWidth, playback?.sourceHeight);
+  const verifiedResBadge = formatResolutionBadge(
+    decodedSize?.width || (quality === 'auto' ? playback?.sourceWidth : undefined),
+    decodedSize?.height || (quality === 'auto' ? playback?.sourceHeight : undefined)
+  );
+  const sourceMbpsLabel = playback?.sourceBitrate
+    ? `${(playback.sourceBitrate / 1_000_000).toFixed(1)} Mbps`
+    : null;
+  const playMethodLabel = offlineQualityLabel
+    ? 'Offline'
+    : !playback
+    ? null
+    : playback.playMethod === 'DirectPlay' || !playback.isHls
+    ? 'Direct Play'
+    : playback.playMethod === 'DirectStream'
+    ? 'Direct Remux'
+    : 'Transcoded';
+  const isLosslessVideo = Boolean(
+    playback &&
+      (!playback.isHls ||
+        playback.playMethod === 'DirectPlay' ||
+        playback.playMethod === 'DirectStream')
+  );
+
+  // Verified concise label for HUD Quality pill (e.g. "Original · 1080p" or "Original · 4K UHD")
+  const verifiedQualityPillLabel = (() => {
+    if (offlineQualityLabel) return `Offline · ${offlineQualityLabel}`;
+    const resSuffix = quality === 'auto' && (verifiedResBadge || sourceResBadge)
+      ? ` · ${verifiedResBadge || sourceResBadge}`
+      : '';
+    const base =
+      quality === 'auto'
+        ? `Original${resSuffix}`
+        : activeQualityLabel.replace(' HD', '').replace(' SD', '');
+    return autoStability ? `Auto · ${base}` : base;
+  })();
+
+  // Tailor Quality Options to the actual media source so we never advertise fake higher tiers
+  // (e.g. don't offer "1080p HD 8 Mbps" on a 720p episode or a 3.8 Mbps 1080p cartoon where Original is already 1080p!)
+  const availableQualityOptions = QUALITY_OPTIONS.filter((opt) => {
+    if (opt.id === 'auto' || quality === opt.id) return true;
+    if (!playback || (!playback.sourceWidth && !playback.sourceBitrate)) return true;
+    const isLowerResolution = Boolean(
+      playback.sourceWidth && opt.maxWidth && opt.maxWidth < playback.sourceWidth * 0.92
+    );
+    const isLowerBitrate = Boolean(
+      playback.sourceBitrate && opt.videoBitrate && opt.videoBitrate < playback.sourceBitrate * 0.88
+    );
+    return isLowerResolution || isLowerBitrate;
+  }).map((opt) => {
+    if (opt.id !== 'auto' || !playback) return opt;
+    const specParts: string[] = [];
+    if (sourceResBadge) specParts.push(sourceResBadge);
+    if (playback.videoCodec) specParts.push(playback.videoCodec);
+    if (sourceMbpsLabel) specParts.push(sourceMbpsLabel);
+    specParts.push(
+      !playback.isHls || playback.playMethod === 'DirectPlay'
+        ? 'Direct Play'
+        : playback.playMethod === 'DirectStream' || quality !== 'auto'
+        ? 'Lossless Video Remux'
+        : 'Source Quality'
+    );
+    return {
+      ...opt,
+      label: sourceResBadge ? `Original (${sourceResBadge})` : 'Original',
+      description: specParts.join(' · '),
+    };
+  });
+
   const brightnessPct = Math.round(brightness * 100);
   const brightnessFillPct =
     ((brightness - MIN_BRIGHTNESS) / (MAX_BRIGHTNESS - MIN_BRIGHTNESS)) * 100;
@@ -1973,10 +2101,13 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
         onTouchStart={handleVideoTouchStart}
         onTouchMove={handleVideoTouchMove}
         onTouchEnd={handleVideoTouchEnd}
+        onLoadedMetadata={syncDecodedVideoSize}
+        onResize={syncDecodedVideoSize}
         onTimeUpdate={() => setCurrentTime(videoRef.current?.currentTime || 0)}
         onDurationChange={() => setDuration(videoRef.current?.duration || 0)}
         onPlay={() => setPlaying(true)}
         onPlaying={() => {
+          syncDecodedVideoSize();
           hasStartedPlayingRef.current = true;
           autoReconnectCountRef.current = 0;
           if (streamStartedAtRef.current === 0) {
@@ -2000,6 +2131,7 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
           }
         }}
         onCanPlay={() => {
+          syncDecodedVideoSize();
           setLoading(false);
           setBuffering(false);
           setStreamStatus(null);
@@ -2030,7 +2162,7 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
 
       {/* Playback Info ("Stats for Nerds") Translucent Overlay */}
       {showPlaybackInfo && (
-        <div className="pointer-events-auto absolute top-20 left-4 sm:left-6 z-30 w-72 sm:w-80 rounded-2xl border border-white/15 bg-black/80 p-3.5 text-[11px] text-zinc-200 shadow-2xl backdrop-blur-md">
+        <div className="pointer-events-auto absolute top-20 left-4 sm:left-6 z-30 w-72 sm:w-80 rounded-2xl border border-white/15 bg-[#0e111d]/95 p-3.5 text-[11px] text-zinc-200 shadow-2xl">
           <div className="mb-2 flex items-center justify-between border-b border-white/10 pb-1.5">
             <span className="flex items-center gap-1.5 font-bold uppercase tracking-wider text-violet-300">
               <Info className="h-3.5 w-3.5" />
@@ -2046,26 +2178,35 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
           <div className="space-y-1 font-mono text-[11px]">
             <div className="flex justify-between gap-2">
               <span className="text-zinc-400">Play Method</span>
-              <span className="font-semibold text-emerald-300">
+              <span className={`font-semibold ${isLosslessVideo ? 'text-emerald-300' : 'text-amber-300'}`}>
                 {offlineQualityLabel
                   ? 'Offline OPFS'
-                  : playback?.isHls
-                  ? useNativeHls
-                    ? 'Native HLS'
-                    : 'HLS (Remux/Transcode)'
-                  : 'Direct Play'}
+                  : !playback?.isHls || playback?.playMethod === 'DirectPlay'
+                  ? 'Direct Play (Original)'
+                  : playback?.playMethod === 'DirectStream'
+                  ? 'Direct Remux (Lossless Video)'
+                  : useNativeHls
+                  ? 'Native HLS (Transcode)'
+                  : 'HLS Transcode'}
               </span>
             </div>
             <div className="flex justify-between gap-2">
-              <span className="text-zinc-400">Resolution</span>
+              <span className="text-zinc-400">Decoded Output</span>
               <span>
-                {videoRef.current?.videoWidth && videoRef.current?.videoHeight
-                  ? `${videoRef.current.videoWidth}×${videoRef.current.videoHeight}`
-                  : playback?.sourceWidth && playback?.sourceHeight
-                  ? `${playback.sourceWidth}×${playback.sourceHeight}`
-                  : 'Detecting...'}
+                {decodedSize
+                  ? `${decodedSize.width}×${decodedSize.height}${verifiedResBadge ? ` (${verifiedResBadge})` : ''}`
+                  : 'Verifying frame...'}
               </span>
             </div>
+            {playback?.sourceWidth && playback?.sourceHeight && (
+              <div className="flex justify-between gap-2">
+                <span className="text-zinc-400">Source File</span>
+                <span>
+                  {playback.sourceWidth}×{playback.sourceHeight}
+                  {sourceResBadge ? ` (${sourceResBadge})` : ''}
+                </span>
+              </div>
+            )}
             {playback?.videoCodec && (
               <div className="flex justify-between gap-2">
                 <span className="text-zinc-400">Video</span>
@@ -2100,8 +2241,10 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
               </div>
             )}
             <div className="flex justify-between gap-2">
-              <span className="text-zinc-400">Buffer Ahead</span>
-              <span>{bufferAheadSec}s</span>
+              <span className="text-zinc-400">Network / Buffer</span>
+              <span>
+                {networkLabel} · {bufferAheadSec}s
+              </span>
             </div>
             <div className="flex justify-between gap-2">
               <span className="text-zinc-400">Speed / Aspect</span>
@@ -2570,6 +2713,31 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
               {item.seriesName} · S{item.seasonNumber}E{item.episodeNumber}
             </p>
           )}
+          {playback && !castDeviceName && (
+            <div className={`mt-1.5 flex flex-wrap items-center justify-end gap-1.5 ${isTv ? 'text-xs' : 'text-[10px] sm:text-[11px]'}`}>
+              {(verifiedResBadge || sourceResBadge) && (
+                <span className="rounded-md border border-white/20 bg-[#141828]/90 px-2 py-0.5 font-extrabold tracking-wide text-white">
+                  {verifiedResBadge || sourceResBadge}
+                </span>
+              )}
+              {(playback.videoCodec || sourceMbpsLabel) && (
+                <span className="hidden sm:inline-flex rounded-md border border-white/15 bg-[#141828]/85 px-2 py-0.5 font-semibold text-zinc-200">
+                  {[playback.videoCodec, sourceMbpsLabel].filter(Boolean).join(' · ')}
+                </span>
+              )}
+              {playMethodLabel && (
+                <span
+                  className={`rounded-md border px-2 py-0.5 font-bold uppercase tracking-wider ${
+                    isLosslessVideo
+                      ? 'border-emerald-400/40 bg-emerald-500/20 text-emerald-200'
+                      : 'border-amber-400/40 bg-amber-500/20 text-amber-200'
+                  }`}
+                >
+                  {playMethodLabel}
+                </span>
+              )}
+            </div>
+          )}
         </div>
       </div>
 
@@ -2991,15 +3159,50 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
               </button>
             )}
 
-            {/* Unified Settings Menu (Aspect Ratio, Playback Speed, Quality, Repeat Mode, Playback Info) */}
+            {/* Dedicated 1-Click Quality Pill on Smart TV */}
+            {isTv && !offlineQualityLabel && (
+              <button
+                ref={tvDirectQualityBtnRef}
+                data-tv-pill="true"
+                onClick={() => {
+                  if (showQualityMenu && settingsPanel === 'quality' && openedQualityDirectlyRef.current) {
+                    setShowQualityMenu(false);
+                  } else {
+                    openedQualityDirectlyRef.current = true;
+                    setSettingsPanel('quality');
+                    setShowQualityMenu(true);
+                    setShowSubMenu(false);
+                    setShowChaptersMenu(false);
+                  }
+                  bumpControls();
+                }}
+                title="Stream Quality"
+                className="flex items-center gap-2 rounded-full border border-white/25 bg-[#141828]/95 px-5 py-3 text-sm font-bold text-white shadow-xl"
+              >
+                <span
+                  className={`h-2.5 w-2.5 rounded-full ${
+                    isLosslessVideo ? 'bg-emerald-400' : 'bg-amber-400'
+                  }`}
+                />
+                <span>{verifiedQualityPillLabel}</span>
+              </button>
+            )}
+
+            {/* Unified Settings Menu (Quality, Aspect Ratio, Playback Speed, Repeat Mode, Playback Info) */}
             <div className="relative">
               <button
                 ref={qualityBtnRef}
                 data-tv-pill={isTv ? 'true' : undefined}
                 onClick={() => {
-                  setShowQualityMenu(!showQualityMenu);
-                  setShowSubMenu(false);
-                  setShowChaptersMenu(false);
+                  if (showQualityMenu && (!openedQualityDirectlyRef.current || !isTv)) {
+                    setShowQualityMenu(false);
+                  } else {
+                    openedQualityDirectlyRef.current = false;
+                    setSettingsPanel('root');
+                    setShowQualityMenu(true);
+                    setShowSubMenu(false);
+                    setShowChaptersMenu(false);
+                  }
                   bumpControls();
                 }}
                 title="Playback Settings"
@@ -3019,10 +3222,8 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
                 ) : (
                   <>
                     <Settings className={isTv ? 'h-5 w-5' : 'h-4 w-4 text-violet-300'} />
-                    <span className="max-w-[92px] truncate sm:max-w-none">
-                      {autoStability
-                        ? `${isTv ? 'Settings · ' : ''}Auto · ${activeQualityLabel.replace(' HD', '').replace(' SD', '')}`
-                        : `${isTv ? 'Settings · ' : ''}${activeQualityLabel}`}
+                    <span className="max-w-[112px] truncate sm:max-w-none">
+                      {isTv ? 'Settings' : verifiedQualityPillLabel}
                     </span>
                   </>
                 )}
@@ -3031,7 +3232,7 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
                 <div
                   data-tv-player-menu="true"
                   className={`fixed inset-x-3 bottom-20 z-40 max-h-[68dvh] overflow-y-auto rounded-2xl border border-white/20 p-2.5 shadow-2xl sm:absolute sm:inset-x-auto sm:bottom-16 sm:right-0 sm:rounded-2xl ${
-                    isTv ? 'sm:w-96 bg-[#0e111d] p-3.5' : 'sm:w-72 bg-surface/95 backdrop-blur-xl'
+                    isTv ? 'sm:w-[26rem] bg-[#0e111d] p-4' : 'sm:w-80 bg-surface/95 backdrop-blur-xl'
                   }`}
                 >
                   {settingsPanel === 'root' && (
@@ -3054,6 +3255,17 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
 
                       <div className="space-y-0.5">
                         <button
+                          onClick={() => setSettingsPanel('quality')}
+                          className="flex w-full items-center justify-between rounded-xl px-3 py-2.5 text-xs text-white transition hover:bg-white/10"
+                        >
+                          <span className="font-semibold">Stream Quality</span>
+                          <span className="flex items-center gap-1 text-zinc-300">
+                            {verifiedQualityPillLabel}
+                            <ChevronRight className="h-3.5 w-3.5" />
+                          </span>
+                        </button>
+
+                        <button
                           onClick={() => setSettingsPanel('aspect')}
                           className="flex w-full items-center justify-between rounded-xl px-3 py-2.5 text-xs text-white transition hover:bg-white/10"
                         >
@@ -3071,17 +3283,6 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
                           <span className="font-semibold">Playback Speed</span>
                           <span className="flex items-center gap-1 text-zinc-400">
                             {playbackSpeed}x
-                            <ChevronRight className="h-3.5 w-3.5" />
-                          </span>
-                        </button>
-
-                        <button
-                          onClick={() => setSettingsPanel('quality')}
-                          className="flex w-full items-center justify-between rounded-xl px-3 py-2.5 text-xs text-white transition hover:bg-white/10"
-                        >
-                          <span className="font-semibold">Quality</span>
-                          <span className="flex items-center gap-1 text-zinc-400">
-                            {autoStability ? `Auto · ${activeQualityLabel.replace(' HD', '').replace(' SD', '')}` : activeQualityLabel}
                             <ChevronRight className="h-3.5 w-3.5" />
                           </span>
                         </button>
@@ -3221,61 +3422,96 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
 
                   {settingsPanel === 'quality' && (
                     <>
-                      <button
-                        onClick={() => setSettingsPanel('root')}
-                        className="mb-1 flex w-full items-center gap-1.5 rounded-lg px-2 py-1.5 text-[11px] font-bold uppercase tracking-wider text-zinc-300 hover:bg-white/10"
-                      >
-                        <ChevronLeft className="h-3.5 w-3.5" />
-                        Stream Quality
-                      </button>
+                      {openedQualityDirectlyRef.current ? (
+                        <div className="mb-1.5 flex items-center justify-between px-2 py-1">
+                          <span className="text-[11px] font-bold uppercase tracking-wider text-zinc-300">
+                            Stream Quality
+                          </span>
+                          <span className="text-[10px] font-medium text-zinc-400">↩ Back to close</span>
+                        </div>
+                      ) : (
+                        <button
+                          onClick={() => setSettingsPanel('root')}
+                          className="mb-1 flex w-full items-center gap-1.5 rounded-lg px-2 py-1.5 text-[11px] font-bold uppercase tracking-wider text-zinc-300 hover:bg-white/10"
+                        >
+                          <ChevronLeft className="h-3.5 w-3.5" />
+                          Stream Quality
+                        </button>
+                      )}
 
-                      {/* Live Network & Buffer Health Strip */}
-                      <div className="mx-1 mb-1.5 flex items-center justify-between rounded-lg bg-white/5 px-2.5 py-1.5 text-[11px] text-zinc-300">
-                        <span className="flex items-center gap-1.5 truncate">
-                          <span
-                            className={`h-2 w-2 rounded-full ${
-                              buffering
-                                ? 'bg-amber-400 animate-pulse'
-                                : bufferAheadSec >= 8
-                                ? 'bg-emerald-400'
-                                : 'bg-violet-400'
-                            }`}
-                          />
-                          {networkLabel}
-                        </span>
-                        <span className="font-mono text-[10px] text-zinc-400">
-                          {bufferAheadSec > 0 ? `${bufferAheadSec}s buffer` : loading ? 'Loading...' : 'Live'}
-                        </span>
+                      {/* Verified Source & Live Network Diagnostics Strip */}
+                      <div className="mx-1 mb-2 space-y-1 rounded-xl border border-white/10 bg-white/[0.04] px-3 py-2 text-[11px] text-zinc-300">
+                        <div className="flex items-center justify-between gap-2">
+                          <span className="flex items-center gap-1.5 font-semibold text-white truncate">
+                            <span
+                              className={`h-2 w-2 rounded-full ${
+                                buffering
+                                  ? 'bg-amber-400 animate-pulse'
+                                  : bufferAheadSec >= 8
+                                  ? 'bg-emerald-400'
+                                  : 'bg-violet-400'
+                              }`}
+                            />
+                            {networkLabel}
+                          </span>
+                          <span className="font-mono text-[10px] text-zinc-400">
+                            {bufferAheadSec > 0 ? `${bufferAheadSec}s buffer` : loading ? 'Loading...' : 'Live'}
+                          </span>
+                        </div>
+                        {playback && (
+                          <div className="flex items-center justify-between gap-2 text-[10px] text-zinc-400">
+                            <span className="truncate">
+                              {decodedSize
+                                ? `Active: ${decodedSize.width}×${decodedSize.height}`
+                                : playback.sourceWidth && playback.sourceHeight
+                                ? `Source: ${playback.sourceWidth}×${playback.sourceHeight}`
+                                : 'Verifying resolution...'}
+                              {sourceMbpsLabel ? ` · ${sourceMbpsLabel}` : ''}
+                            </span>
+                            {playMethodLabel && (
+                              <span
+                                className={`font-bold ${
+                                  isLosslessVideo ? 'text-emerald-300' : 'text-amber-300'
+                                }`}
+                              >
+                                {playMethodLabel}
+                              </span>
+                            )}
+                          </div>
+                        )}
                       </div>
 
-                      {/* Auto (Stability First) Mode */}
-                      <button
-                        onClick={handleEnableAutoStability}
-                        className={`mb-1 flex w-full items-center justify-between gap-2 rounded-xl px-3 py-2.5 text-left transition ${
-                          autoStability
-                            ? 'bg-violet-600 text-white'
-                            : 'text-zinc-200 hover:bg-white/10'
-                        }`}
-                      >
-                        <div className="min-w-0">
-                          <div className="text-xs font-bold">Auto (Stability First)</div>
-                          <div className="text-[11px] opacity-85">
-                            Auto-lowers quality until buffering stops ({activeQualityLabel})
-                          </div>
-                        </div>
-                        {autoStability && <Check className="h-4 w-4 flex-shrink-0" />}
-                      </button>
+                      {/* On Mobile/Web, show Auto (Stability First) above manual presets */}
+                      {!isTv && (
+                        <>
+                          <button
+                            onClick={handleEnableAutoStability}
+                            className={`mb-1 flex w-full items-center justify-between gap-2 rounded-xl px-3 py-2.5 text-left transition ${
+                              autoStability
+                                ? 'bg-violet-600 text-white'
+                                : 'text-zinc-200 hover:bg-white/10'
+                            }`}
+                          >
+                            <div className="min-w-0">
+                              <div className="text-xs font-bold">Auto (Stability First)</div>
+                              <div className="text-[11px] opacity-85">
+                                Auto-adjusts quality if connection buffers ({activeQualityLabel})
+                              </div>
+                            </div>
+                            {autoStability && <Check className="h-4 w-4 flex-shrink-0" />}
+                          </button>
+                          <div className="my-1 border-t border-white/10" />
+                        </>
+                      )}
 
-                      <div className="my-1 border-t border-white/10" />
-
-                      {QUALITY_OPTIONS.map((opt) => {
+                      {availableQualityOptions.map((opt) => {
                         const isSelectedManual = !autoStability && quality === opt.id;
                         const isActiveAuto = autoStability && quality === opt.id;
                         return (
                           <button
                             key={opt.id}
                             onClick={() => handleQualityChange(opt.id)}
-                            className={`flex w-full items-center justify-between gap-2 rounded-xl px-3 py-2 text-left transition ${
+                            className={`flex w-full items-center justify-between gap-2 rounded-xl px-3 py-2.5 text-left transition ${
                               isSelectedManual
                                 ? 'bg-violet-600 text-white'
                                 : isActiveAuto
@@ -3285,12 +3521,35 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
                           >
                             <div className="min-w-0">
                               <div className="text-xs font-bold">{opt.label}</div>
-                              <div className="text-[11px] opacity-80">{opt.description}</div>
+                              <div className="text-[11px] opacity-85">{opt.description}</div>
                             </div>
                             {isSelectedManual && <Check className="h-4 w-4 flex-shrink-0" />}
                           </button>
                         );
                       })}
+
+                      {/* On Smart TV, Original is #1 default; Auto Adaptive sits below as an optional fallback */}
+                      {isTv && (
+                        <>
+                          <div className="my-1.5 border-t border-white/10" />
+                          <button
+                            onClick={handleEnableAutoStability}
+                            className={`flex w-full items-center justify-between gap-2 rounded-xl px-3 py-2.5 text-left transition ${
+                              autoStability
+                                ? 'bg-violet-600 text-white'
+                                : 'text-zinc-200 hover:bg-white/10'
+                            }`}
+                          >
+                            <div className="min-w-0">
+                              <div className="text-xs font-bold">Auto (Hotspot / Weak Wi-Fi)</div>
+                              <div className="text-[11px] opacity-85">
+                                Automatically lowers resolution only if playback stalls
+                              </div>
+                            </div>
+                            {autoStability && <Check className="h-4 w-4 flex-shrink-0" />}
+                          </button>
+                        </>
+                      )}
                     </>
                   )}
                 </div>

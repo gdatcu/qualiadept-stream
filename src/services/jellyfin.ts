@@ -16,9 +16,14 @@ import {
   type QualityPreset,
   type RemoteTrailer,
   type SeasonItem,
+  type StreamPlayMethod,
   type SubtitleTrack,
 } from '../types/media';
-import { getDirectPlayVideoCodecs } from '../utils/network';
+import {
+  canMsePlayHevc,
+  formatResolutionBadge,
+  getDirectPlayVideoCodecs,
+} from '../utils/network';
 
 const SESSION_STORAGE_KEY = 'qualiadept_stream_session_v1';
 const SAVED_PROFILES_KEY = 'qualiadept_stream_profiles_v1';
@@ -966,6 +971,7 @@ export async function fetchItemDetails(
       chapters,
       isPlayed: Boolean(raw.UserData?.Played),
       videoSpec: formatVideoSpec(videoStream),
+      videoCodec: videoStream?.Codec?.toLowerCase(),
       audioTracks,
       subtitleTracks,
       defaultAudioIndex: defaultAudio ? defaultAudio.index : null,
@@ -1084,6 +1090,8 @@ export interface PlaybackOptions {
   bypassCache?: boolean;
   /** Force HLS transcoding/remuxing even if source could Direct Play (used when Direct Play stalls on mobile) */
   forceHls?: boolean;
+  /** Fall back from HEVC fMP4 to H264 MPEG-TS if the device's MSE pipeline rejects fMP4 HEVC */
+  disableHevcFmp4?: boolean;
 }
 
 interface PrefetchEntry {
@@ -1100,7 +1108,7 @@ function buildPlaybackCacheKey(
   quality: QualityPreset,
   options: PlaybackOptions
 ): string {
-  return `${itemId}:${quality}:${options.audioStreamIndex ?? 'def'}:${options.burnInSubtitleIndex ?? 'none'}:${options.forceHls ? 'hls' : 'any'}`;
+  return `${itemId}:${quality}:${options.audioStreamIndex ?? 'def'}:${options.burnInSubtitleIndex ?? 'none'}:${options.forceHls ? 'hls' : 'any'}:${options.disableHevcFmp4 ? 'nohevc' : 'hevc'}`;
 }
 
 interface RawMediaStream {
@@ -1126,13 +1134,8 @@ function formatVideoSpec(s?: RawMediaStream): string | undefined {
   if (!s) return undefined;
   if (s.DisplayTitle) return s.DisplayTitle;
   const parts: string[] = [];
-  if (s.Width && s.Width >= 3800) parts.push('4K');
-  else if (s.Height) {
-    if (s.Height >= 1000) parts.push('1080p');
-    else if (s.Height >= 700) parts.push('720p');
-    else if (s.Height >= 460) parts.push('480p');
-    else parts.push(`${s.Height}p`);
-  }
+  const resBadge = formatResolutionBadge(s.Width, s.Height);
+  if (resBadge) parts.push(resBadge);
   if (s.Codec) parts.push(s.Codec.toUpperCase());
   const range = s.VideoRangeType || s.VideoRange;
   if (range) parts.push(range);
@@ -1160,17 +1163,36 @@ function formatSubtitleLabel(s: RawMediaStream): string {
   return parts.join(' · ');
 }
 
+const VIDEO_TRANSCODE_REASONS = new Set([
+  'VideoCodecNotSupported',
+  'VideoProfileNotSupported',
+  'VideoLevelNotSupported',
+  'VideoResolutionNotSupported',
+  'VideoBitDepthNotSupported',
+  'VideoFramerateNotSupported',
+  'VideoBitrateNotSupported',
+  'ContainerBitrateExceedsLimit',
+  'AnamorphicVideoNotSupported',
+  'InterlacedVideoNotSupported',
+  'RefFramesNotSupported',
+  'VideoRangeNotSupported',
+  'VideoRangeTypeNotSupported',
+  'SubtitleCodecNotSupported',
+]);
+
 async function fetchPlaybackInfoUncached(
   session: AuthSession,
   item: MediaItem,
   quality: QualityPreset,
-  options: PlaybackOptions
+  options: PlaybackOptions,
+  forceHevcFmp4 = false
 ): Promise<PlaybackInfo> {
   if (session.isDemo) {
     const url = item.demoStreamUrl || 'https://test-streams.mux.dev/x36xhzz/x36xhzz.m3u8';
     return {
       streamUrl: url,
       isHls: url.endsWith('.m3u8'),
+      playMethod: 'DirectPlay',
       mediaSourceId: item.id,
       playSessionId: `demo-${Date.now()}`,
       audioTracks: [],
@@ -1182,22 +1204,34 @@ async function fetchPlaybackInfoUncached(
   const preset = QUALITY_OPTIONS.find((q) => q.id === quality) || QUALITY_OPTIONS[0];
   const needsBurnIn = options.burnInSubtitleIndex !== undefined && options.burnInSubtitleIndex !== null;
   const hasExplicitAudio = options.audioStreamIndex !== undefined && options.audioStreamIndex !== null;
-  const maxBitrate = preset.videoBitrate ?? 40_000_000;
+  // Original ('auto') allows up to 120 Mbps so Blu-ray / 4K UHD streams are never bitrate-throttled
+  const maxBitrate = preset.videoBitrate ?? 120_000_000;
   const allowDirectPlay = !needsBurnIn && !hasExplicitAudio && !options.forceHls;
+  // Keep DirectStream (-c:v copy lossless video remux) enabled whenever not burning bitmap subtitles,
+  // even when remuxing MKVs, converting DD+ 5.1 audio to AAC, or switching audio tracks!
+  const allowDirectStream = !needsBurnIn;
+
+  const cachedCodec = itemDetailsCache.get(`${session.userId}:${item.id}`)?.details.videoCodec;
+  const useHevcFmp4 =
+    !options.disableHevcFmp4 &&
+    !needsBurnIn &&
+    quality === 'auto' &&
+    canMsePlayHevc() &&
+    (forceHevcFmp4 || cachedCodec === 'hevc' || cachedCodec === 'h265');
 
   const playbackBody: Record<string, unknown> = {
     MaxStreamingBitrate: maxBitrate,
     EnableDirectPlay: allowDirectPlay,
-    EnableDirectStream: allowDirectPlay,
+    EnableDirectStream: allowDirectStream,
     EnableTranscoding: true,
-    AllowVideoStreamCopy: true,
+    AllowVideoStreamCopy: allowDirectStream,
     AllowAudioStreamCopy: true,
     DeviceProfile: {
       MaxStreamingBitrate: maxBitrate,
       DirectPlayProfiles: allowDirectPlay
         ? [
             {
-              Container: 'mp4,m4v,webm',
+              Container: 'mp4,m4v,mov,webm',
               Type: 'Video',
               VideoCodec: getDirectPlayVideoCodecs(),
               AudioCodec: 'aac,mp3,opus',
@@ -1222,14 +1256,14 @@ async function fetchPlaybackInfoUncached(
         : [],
       TranscodingProfiles: [
         {
-          Container: 'ts',
+          Container: useHevcFmp4 ? 'mp4' : 'ts',
           Type: 'Video',
-          VideoCodec: 'h264',
+          VideoCodec: useHevcFmp4 ? 'h264,hevc' : 'h264',
           AudioCodec: 'aac',
           Protocol: 'hls',
           Context: 'Streaming',
           MaxAudioChannels: '2',
-          // Keep segments keyframe-aligned (BreakOnNonKeyFrames: false) so Android MSE never stalls waiting for an IDR frame
+          // Keep segments keyframe-aligned (BreakOnNonKeyFrames: false) so MSE never stalls waiting for an IDR frame
           SegmentLength: 4,
           MinSegments: 1,
           BreakOnNonKeyFrames: false,
@@ -1272,10 +1306,29 @@ async function fetchPlaybackInfoUncached(
   const source = data.MediaSources?.[0];
   if (!source) throw new Error('No playable media source found.');
 
+  const streams: RawMediaStream[] = source.MediaStreams || [];
+  const videoStream = streams.find((s) => s.Type === 'Video');
+  const detectedCodecLower = (videoStream?.Codec || '').toLowerCase();
+
+  // If playing in Original ('auto') and we discover an uncached HEVC/H.265 MKV on an HEVC-capable TV/browser,
+  // transparently renegotiate once with fMP4 (h264,hevc) so Jellyfin performs lossless -c:v copy instead of CPU transcoding!
+  if (
+    !options.disableHevcFmp4 &&
+    !useHevcFmp4 &&
+    !forceHevcFmp4 &&
+    !needsBurnIn &&
+    quality === 'auto' &&
+    canMsePlayHevc() &&
+    (detectedCodecLower === 'hevc' || detectedCodecLower === 'h265') &&
+    !source.SupportsDirectPlay &&
+    String(source.TranscodingUrl || '').includes('VideoCodecNotSupported')
+  ) {
+    return fetchPlaybackInfoUncached(session, item, quality, options, true);
+  }
+
   const playSessionId: string = data.PlaySessionId || crypto.randomUUID();
   const mediaSourceId: string = source.Id;
   const token = encodeURIComponent(session.accessToken);
-  const streams: RawMediaStream[] = source.MediaStreams || [];
 
   // Extract all Audio tracks
   const audioTracks: AudioTrack[] = streams
@@ -1328,8 +1381,6 @@ async function fetchPlaybackInfoUncached(
     });
 
   // Allow Direct Play whenever the native MP4/WebM source already fits within the selected quality cap
-  // (avoids unnecessary ARM64 CPU transcoding on 5G for SD/720p videos while still capping high-bitrate 1080p/4K).
-  const videoStream = streams.find((s) => s.Type === 'Video');
   const activeAudioStream =
     streams.find((s) => s.Type === 'Audio' && s.Index === effectiveAudioIndex) ||
     streams.find((s) => s.Type === 'Audio');
@@ -1356,12 +1407,14 @@ async function fetchPlaybackInfoUncached(
     !isNonDefaultAudio &&
     fitsSelectedQuality &&
     source.SupportsDirectPlay &&
-    ['mp4', 'm4v', 'webm'].includes((source.Container || '').toLowerCase());
+    ['mp4', 'm4v', 'mov', 'webm'].includes((source.Container || '').toLowerCase());
 
   if (canDirectPlay) {
     return {
       streamUrl: `${session.serverUrl}/Videos/${item.id}/stream?static=true&mediaSourceId=${mediaSourceId}&api_key=${token}`,
       isHls: false,
+      playMethod: 'DirectPlay',
+      transcodeReasons: [],
       mediaSourceId,
       playSessionId,
       audioTracks,
@@ -1379,10 +1432,16 @@ async function fetchPlaybackInfoUncached(
   }
 
   let hlsUrl: string;
+  let transcodeReasons: string[] = [];
   if (source.TranscodingUrl) {
     // Always prefer Jellyfin's server-negotiated TranscodingUrl (includes SegmentContainer, TranscodeReasons,
     // PlaySessionId, h264 profile/level, and remux/stream-copy decisions when source fits the bitrate/width cap).
     const parsed = new URL(source.TranscodingUrl, session.serverUrl);
+    const rawReasons = parsed.searchParams.get('TranscodeReasons') || '';
+    transcodeReasons = rawReasons
+      .split(',')
+      .map((r) => r.trim())
+      .filter(Boolean);
     if (effectiveAudioIndex !== null && (hasExplicitAudio || !parsed.searchParams.has('AudioStreamIndex'))) {
       parsed.searchParams.set('AudioStreamIndex', String(effectiveAudioIndex));
     }
@@ -1395,8 +1454,8 @@ async function fetchPlaybackInfoUncached(
     }
     hlsUrl = parsed.toString();
   } else {
-    const audioBitrate = 192_000;
-    const videoBitrate = Math.max(400_000, (preset.videoBitrate ?? 12_000_000) - audioBitrate);
+    const audioBitrate = quality === 'auto' || quality === '1080p' ? 256_000 : 192_000;
+    const videoBitrate = Math.max(400_000, (preset.videoBitrate ?? 40_000_000) - audioBitrate);
     const hlsParams = new URLSearchParams({
       MediaSourceId: mediaSourceId,
       PlaySessionId: playSessionId,
@@ -1425,9 +1484,18 @@ async function fetchPlaybackInfoUncached(
     hlsUrl = `${session.serverUrl}/Videos/${item.id}/master.m3u8?${hlsParams.toString()}`;
   }
 
+  const isVideoTranscoded =
+    needsBurnIn ||
+    !fitsSelectedQuality ||
+    !source.TranscodingUrl ||
+    transcodeReasons.some((r) => VIDEO_TRANSCODE_REASONS.has(r));
+  const playMethod: StreamPlayMethod = isVideoTranscoded ? 'Transcode' : 'DirectStream';
+
   return {
     streamUrl: hlsUrl,
     isHls: true,
+    playMethod,
+    transcodeReasons,
     mediaSourceId,
     playSessionId,
     audioTracks,

@@ -36,12 +36,19 @@ for (const file of fs.readdirSync(outDir)) {
   }
 }
 
-// Strip PWA service worker script & manifest links from index.html so Tizen logs zero 404s
+// Strip PWA service worker script & manifest links from index.html so Tizen logs zero 404s,
+// and include Samsung's built-in $WEBAPIS/webapis/webapis.js for accurate Ethernet / Wi-Fi detection
 const indexHtmlPath = path.join(outDir, 'index.html');
 if (fs.existsSync(indexHtmlPath)) {
   let html = fs.readFileSync(indexHtmlPath, 'utf-8');
   html = html.replace(/<script[^>]*registerSW\.js[^>]*><\/script>\s*/g, '');
   html = html.replace(/<link[^>]*manifest\.webmanifest[^>]*>\s*/g, '');
+  if (!html.includes('$WEBAPIS/webapis/webapis.js')) {
+    html = html.replace(
+      '</head>',
+      '  <script src="$WEBAPIS/webapis/webapis.js"></script>\n  </head>'
+    );
+  }
   fs.writeFileSync(indexHtmlPath, html, 'utf-8');
 }
 

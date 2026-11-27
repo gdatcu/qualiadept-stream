@@ -17,7 +17,7 @@ export interface QualityOption {
 }
 
 export const QUALITY_OPTIONS: QualityOption[] = [
-  { id: 'auto', label: 'Original', description: 'Best available (Direct Play / 12 Mbps)' },
+  { id: 'auto', label: 'Original', description: 'Untouched source quality (Direct Play / Lossless Remux)' },
   { id: '1080p', label: '1080p HD', description: '8 Mbps · Smooth Full HD', maxWidth: 1920, videoBitrate: 8_000_000 },
   { id: '720p', label: '720p HD', description: '3 Mbps · Crisp & fast on 5G / Wi-Fi', maxWidth: 1280, videoBitrate: 3_000_000 },
   { id: '480p', label: '480p SD', description: '1.5 Mbps · Smooth on 4G / variable mobile', maxWidth: 854, videoBitrate: 1_500_000 },
@@ -78,6 +78,7 @@ export interface MediaItemDetails {
   chapters: ChapterItem[];
   isPlayed: boolean;
   videoSpec?: string;
+  videoCodec?: string;
   audioTracks: AudioTrack[];
   subtitleTracks: SubtitleTrack[];
   defaultAudioIndex: number | null;
@@ -127,9 +128,13 @@ export interface SeasonItem {
   seasonNumber: number;
 }
 
+export type StreamPlayMethod = 'DirectPlay' | 'DirectStream' | 'Transcode';
+
 export interface PlaybackInfo {
   streamUrl: string;
   isHls: boolean;
+  playMethod?: StreamPlayMethod;
+  transcodeReasons?: string[];
   mediaSourceId: string;
   playSessionId: string;
   audioTracks: AudioTrack[];

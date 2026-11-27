@@ -281,12 +281,18 @@ export const DetailModal: React.FC<DetailModalProps> = ({
   const buildStartOptions = (
     startFromBeginning = false,
     startAtSeconds?: number
-  ): PlaybackStartOptions => ({
-    startFromBeginning,
-    startAtSeconds,
-    audioIndex: selectedAudioIndex,
-    subtitleIndex: selectedSubtitleIndex,
-  });
+  ): PlaybackStartOptions => {
+    const isCustomAudio =
+      selectedAudioIndex !== null &&
+      details?.defaultAudioIndex !== undefined &&
+      selectedAudioIndex !== details.defaultAudioIndex;
+    return {
+      startFromBeginning,
+      startAtSeconds,
+      audioIndex: isCustomAudio ? selectedAudioIndex : null,
+      subtitleIndex: selectedSubtitleIndex,
+    };
+  };
 
   const handlePrimaryPlay = (startFromBeginning = false) => {
     if (item.type === 'BoxSet') {
