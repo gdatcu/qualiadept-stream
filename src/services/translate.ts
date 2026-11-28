@@ -291,6 +291,7 @@ interface QueuedTask {
   text: string;
   targetLang: AppLanguage;
   priority: 'high' | 'normal';
+  skipCacheStore?: boolean;
   refCount: number;
   resolve: (value: string) => void;
   cleanupListeners: Array<() => void>;
@@ -350,7 +351,9 @@ async function executeTask(task: QueuedTask): Promise<void> {
 
     if (result && result.length > 0) {
       recentFailures.delete(task.key);
-      storeCachedTranslation(task.key, result);
+      if (!task.skipCacheStore) {
+        storeCachedTranslation(task.key, result);
+      }
       task.resolve(result);
     } else {
       recentFailures.set(task.key, Date.now());
@@ -454,4 +457,279 @@ export async function translateText(
 
   inFlightEntries.set(key, { promise, task });
   return promise;
+}
+
+// Instant offline Romanian translations for the most common TMDB/Jellyfin tags
+const COMMON_TAG_MAP_RO: Record<string, string> = {
+  action: 'acțiune',
+  adventure: 'aventură',
+  alien: 'extraterestru',
+  aliens: 'extratereștri',
+  'alternate reality': 'realitate alternativă',
+  amnesia: 'amnezie',
+  animation: 'animație',
+  anime: 'anime',
+  anthology: 'antologie',
+  apocalypse: 'apocalipsă',
+  'artificial intelligence': 'inteligență artificială',
+  assassin: 'asasin',
+  'based on comic': 'după benzi desenate',
+  'based on novel or book': 'după roman',
+  'based on true story': 'după fapte reale',
+  'based on video game': 'după joc video',
+  betrayal: 'trădare',
+  biography: 'biografie',
+  biopic: 'biografic',
+  'black comedy': 'comedie neagră',
+  boxing: 'box',
+  'cold war': 'războiul rece',
+  comedy: 'comedie',
+  'coming of age': 'maturizare',
+  conspiracy: 'conspirație',
+  corruption: 'corupție',
+  cowboy: 'cowboy',
+  creature: 'creatură',
+  crime: 'crimă',
+  cult: 'sectă',
+  curse: 'blestem',
+  cyberpunk: 'cyberpunk',
+  'dark comedy': 'comedie neagră',
+  'dark fantasy': 'fantezie întunecată',
+  demon: 'demon',
+  detective: 'detectiv',
+  disaster: 'dezastru',
+  documentary: 'documentar',
+  dragon: 'dragon',
+  drama: 'dramă',
+  'drug cartel': 'cartel de droguri',
+  dystopia: 'distopie',
+  escape: 'evadare',
+  espionage: 'spionaj',
+  exorcism: 'exorcism',
+  family: 'familie',
+  fantasy: 'fantezie',
+  'folk horror': 'horror folcloric',
+  football: 'fotbal',
+  forest: 'pădure',
+  'found footage': 'imagini găsite',
+  friendship: 'prietenie',
+  gangster: 'gangster',
+  ghost: 'fantomă',
+  gore: 'gore',
+  hallucination: 'halucinație',
+  'haunted house': 'casă bântuită',
+  heist: 'jaf',
+  'high school': 'liceu',
+  historical: 'istoric',
+  history: 'istorie',
+  hitman: 'asasin plătit',
+  horror: 'horror',
+  investigation: 'investigație',
+  island: 'insulă',
+  kidnapping: 'răpire',
+  love: 'dragoste',
+  lovecraftian: 'lovecraftian',
+  mafia: 'mafie',
+  magic: 'magie',
+  'martial arts': 'arte marțiale',
+  'mind-bending': 'tulburător',
+  miniseries: 'miniserie',
+  'missing person': 'persoană dispărută',
+  monster: 'monstru',
+  murder: 'crimă',
+  music: 'muzică',
+  musical: 'muzical',
+  mystery: 'mister',
+  nightmare: 'coșmar',
+  ninja: 'ninja',
+  'parallel universe': 'univers paralel',
+  'period drama': 'dramă de epocă',
+  pirate: 'pirat',
+  'plot twist': 'întorsătură de situație',
+  police: 'poliție',
+  possession: 'posedare',
+  'post-apocalyptic': 'post-apocaliptic',
+  prequel: 'prequel',
+  prison: 'închisoare',
+  psychological: 'psihologic',
+  'psychological thriller': 'thriller psihologic',
+  racing: 'curse',
+  remake: 'remake',
+  revenge: 'răzbunare',
+  'road trip': 'călătorie pe șosea',
+  romance: 'romantic',
+  'romantic comedy': 'comedie romantică',
+  samurai: 'samurai',
+  'sci-fi': 'SF',
+  'science fiction': 'SF',
+  secret: 'secret',
+  'secret society': 'societate secretă',
+  sequel: 'continuare',
+  'serial killer': 'criminal în serie',
+  sheriff: 'șerif',
+  slasher: 'slasher',
+  'small town': 'orășel',
+  space: 'spațiu',
+  'spin-off': 'spin-off',
+  sports: 'sport',
+  spy: 'spion',
+  superhero: 'supererou',
+  supernatural: 'supranatural',
+  'supernatural horror': 'horror supranatural',
+  survival: 'supraviețuire',
+  'survival horror': 'horror de supraviețuire',
+  suspense: 'suspans',
+  thriller: 'thriller',
+  'time loop': 'buclă temporală',
+  'time travel': 'călătorie în timp',
+  trapped: 'captiv',
+  'treasure hunt': 'vânătoare de comori',
+  undercover: 'sub acoperire',
+  vampire: 'vampir',
+  violence: 'violență',
+  war: 'război',
+  western: 'western',
+  witch: 'vrăjitoare',
+  'world war i': 'Primul Război Mondial',
+  'world war ii': 'Al Doilea Război Mondial',
+  zombie: 'zombi',
+};
+
+function makeTagCacheKey(tagLower: string, targetLang: AppLanguage): string {
+  return `tag:${targetLang}:${tagLower}`;
+}
+
+function normalizeTagCasing(original: string, translated: string): string {
+  const clean = translated.trim();
+  if (!clean) return original;
+  // Preserve TMDB's lowercase tag convention when original tag is all lowercase
+  if (original === original.toLowerCase() && /^[A-ZĂÂÎȘȚ][a-zăâîșț]/.test(clean)) {
+    return clean.charAt(0).toLowerCase() + clean.slice(1);
+  }
+  return clean;
+}
+
+export function getCachedTagTranslation(tag: string, targetLang: AppLanguage): string | null {
+  const trimmed = tag.trim();
+  if (!trimmed) return '';
+  const lower = trimmed.toLowerCase();
+
+  if (targetLang === 'en') {
+    if (!looksRomanian(trimmed)) return trimmed;
+  } else {
+    if (COMMON_TAG_MAP_RO[lower]) return COMMON_TAG_MAP_RO[lower];
+    if (looksRomanian(trimmed)) return trimmed;
+  }
+
+  ensureCacheLoaded();
+  const key = makeTagCacheKey(lower, targetLang);
+  const hit = memoryCache.get(key);
+  if (hit !== undefined) {
+    memoryCache.delete(key);
+    memoryCache.set(key, hit);
+    return hit;
+  }
+  return null;
+}
+
+/**
+ * Translates a list of tags into the target language using the built-in dictionary,
+ * persistent LRU cache, and a single batched network request for any uncached tags.
+ */
+export async function translateTagsBatch(
+  tags: string[],
+  targetLang: AppLanguage,
+  signal?: AbortSignal
+): Promise<Record<string, string>> {
+  const result: Record<string, string> = {};
+  const pending: string[] = [];
+  const pendingSeen = new Set<string>();
+
+  for (const tag of tags) {
+    const trimmed = tag.trim();
+    if (!trimmed) continue;
+    const cached = getCachedTagTranslation(trimmed, targetLang);
+    if (cached !== null) {
+      result[tag] = cached;
+    } else {
+      result[tag] = tag;
+      const lower = trimmed.toLowerCase();
+      if (!pendingSeen.has(lower)) {
+        pendingSeen.add(lower);
+        pending.push(trimmed);
+      }
+    }
+  }
+
+  if (
+    pending.length === 0 ||
+    signal?.aborted ||
+    (typeof navigator !== 'undefined' && navigator.onLine === false)
+  ) {
+    return result;
+  }
+
+  // Batch up to 15 uncached tags per request using newline separation
+  const BATCH_SIZE = 15;
+  for (let i = 0; i < pending.length; i += BATCH_SIZE) {
+    if (signal?.aborted) break;
+    const batch = pending.slice(i, i + BATCH_SIZE);
+    const joined = batch.join('\n');
+    const batchKey = `tagbatch:${targetLang}:${hashText(joined)}`;
+
+    const failedAt = recentFailures.get(batchKey);
+    if (failedAt && Date.now() - failedAt < FAILURE_COOLDOWN_MS) {
+      continue;
+    }
+
+    const existing = inFlightEntries.get(batchKey);
+    let translatedJoined: string;
+    if (existing) {
+      existing.task.refCount++;
+      attachAbortSignal(existing.task, signal);
+      translatedJoined = await existing.promise;
+    } else {
+      let task!: QueuedTask;
+      const promise = new Promise<string>((resolve) => {
+        task = {
+          key: batchKey,
+          text: joined,
+          targetLang,
+          priority: 'high',
+          skipCacheStore: true,
+          refCount: 1,
+          resolve,
+          cleanupListeners: [],
+        };
+        enqueueTask(task);
+        attachAbortSignal(task, signal);
+        drainQueue();
+      });
+      inFlightEntries.set(batchKey, { promise, task });
+      translatedJoined = await promise;
+    }
+
+    if (signal?.aborted) break;
+
+    const lines = translatedJoined
+      .split(/\r?\n/)
+      .map((l) => l.trim())
+      .filter((l) => l.length > 0);
+
+    if (lines.length === batch.length) {
+      for (let j = 0; j < batch.length; j++) {
+        const orig = batch[j];
+        const lower = orig.toLowerCase();
+        const normalized = normalizeTagCasing(orig, lines[j]);
+        storeCachedTranslation(makeTagCacheKey(lower, targetLang), normalized);
+        for (const rawTag of tags) {
+          if (rawTag.trim().toLowerCase() === lower) {
+            result[rawTag] = normalized;
+          }
+        }
+      }
+    }
+  }
+
+  return result;
 }

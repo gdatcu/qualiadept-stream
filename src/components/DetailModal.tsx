@@ -57,7 +57,7 @@ import type {
 } from '../types/media';
 import { getRecommendedQuality } from '../utils/network';
 import { isTizenTv } from '../utils/tvNavigation';
-import { TranslatedOverview, useTranslatedText } from './TranslatedOverview';
+import { TranslatedOverview, useTranslatedTags, useTranslatedText } from './TranslatedOverview';
 
 interface DetailModalProps {
   session: AuthSession;
@@ -398,11 +398,11 @@ export const DetailModal: React.FC<DetailModalProps> = ({
       details &&
       (details.videoSpec || details.audioTracks.length > 0 || details.subtitleTracks.length > 0)
   );
-  const visibleTags = details
-    ? showAllTags
-      ? details.tags
-      : details.tags.slice(0, 10)
-    : [];
+  const visibleTags = useMemo(
+    () => (details ? (showAllTags ? details.tags : details.tags.slice(0, 10)) : []),
+    [details, showAllTags]
+  );
+  const translatedTags = useTranslatedTags(visibleTags, lang);
 
   return (
     <div
@@ -1027,7 +1027,7 @@ export const DetailModal: React.FC<DetailModalProps> = ({
                         key={tag}
                         className="rounded-md bg-white/5 px-2 py-0.5 text-xs text-zinc-300"
                       >
-                        {tag}
+                        {translatedTags[tag] || tag}
                       </span>
                     ))}
                     {details.tags.length > 10 && (

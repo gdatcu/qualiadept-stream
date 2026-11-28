@@ -1,6 +1,11 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 import { formatOverviewText, type AppLanguage } from '../i18n';
-import { getCachedTranslation, translateText } from '../services/translate';
+import {
+  getCachedTagTranslation,
+  getCachedTranslation,
+  translateTagsBatch,
+  translateText,
+} from '../services/translate';
 
 /**
  * Translates dynamic media text (overview / tagline) into the active UI language
@@ -41,6 +46,58 @@ export function useTranslatedText(
     return resolved.translated;
   }
   return source;
+}
+
+/**
+ * Translates a list of TMDB/Jellyfin tags into the active UI language using
+ * instant dictionary/cache hits and a single batched request for any remaining tags.
+ */
+export function useTranslatedTags(
+  tags: string[],
+  lang: AppLanguage
+): Record<string, string> {
+  const signature = `${lang}::${tags.join('\u0001')}`;
+
+  const { syncMap, hasUncached } = useMemo(() => {
+    const map: Record<string, string> = {};
+    let missing = false;
+    for (const tag of tags) {
+      const hit = getCachedTagTranslation(tag, lang);
+      if (hit !== null) {
+        map[tag] = hit;
+      } else {
+        map[tag] = tag;
+        missing = true;
+      }
+    }
+    return { syncMap: map, hasUncached: missing };
+  }, [signature]);
+
+  const [asyncResult, setAsyncResult] = useState<{
+    signature: string;
+    map: Record<string, string>;
+  } | null>(null);
+
+  useEffect(() => {
+    if (!hasUncached || tags.length === 0) return;
+    let active = true;
+    const controller = new AbortController();
+
+    translateTagsBatch(tags, lang, controller.signal).then((map) => {
+      if (!active || controller.signal.aborted) return;
+      setAsyncResult({ signature, map });
+    });
+
+    return () => {
+      active = false;
+      controller.abort();
+    };
+  }, [signature, hasUncached]);
+
+  if (asyncResult && asyncResult.signature === signature) {
+    return asyncResult.map;
+  }
+  return syncMap;
 }
 
 interface TranslatedOverviewProps {
