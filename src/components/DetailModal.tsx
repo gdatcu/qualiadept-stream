@@ -55,9 +55,16 @@ import type {
   PlaybackStartOptions,
   SeasonItem,
 } from '../types/media';
+import { getLocalizedTitleInfo, prefetchOfficialRoMeta } from '../services/tmdb';
 import { getRecommendedQuality } from '../utils/network';
 import { isTizenTv } from '../utils/tvNavigation';
-import { TranslatedOverview, useTranslatedTags, useTranslatedText } from './TranslatedOverview';
+import {
+  TranslatedOverview,
+  useLocalizedMediaMeta,
+  useOfficialRoMetaVersion,
+  useTranslatedTags,
+  useTranslatedText,
+} from './TranslatedOverview';
 
 interface DetailModalProps {
   session: AuthSession;
@@ -145,8 +152,18 @@ export const DetailModal: React.FC<DetailModalProps> = ({
 
   // Rich Jellyfin metadata (Cast & Crew, Specs, Tracks, Tagline, Tags, Trailers, Similar)
   const [details, setDetails] = useState<MediaItemDetails | null>(null);
-  const translatedOverview = useTranslatedText(item.overview, lang, 'high');
-  const translatedTagline = useTranslatedText(details?.tagline, lang, 'high');
+  useOfficialRoMetaVersion(lang === 'ro');
+  const {
+    title: displayTitle,
+    originalTitle,
+    officialOverview,
+    officialTagline,
+  } = useLocalizedMediaMeta(item, lang, {
+    tmdbId: details?.tmdbId,
+    imdbId: details?.imdbId,
+  });
+  const translatedOverview = useTranslatedText(item.overview, lang, 'high', officialOverview);
+  const translatedTagline = useTranslatedText(details?.tagline, lang, 'high', officialTagline);
   const [similarItems, setSimilarItems] = useState<MediaItem[]>([]);
   const [selectedAudioIndex, setSelectedAudioIndex] = useState<number | null>(null);
   const [selectedSubtitleIndex, setSelectedSubtitleIndex] = useState<number | null>(null);
@@ -229,6 +246,15 @@ export const DetailModal: React.FC<DetailModalProps> = ({
       active = false;
     };
   }, [session, item.id, item.type]);
+
+  // Prefetch official Romanian titles for similar & collection cards when in RO mode
+  useEffect(() => {
+    if (lang !== 'ro') return;
+    const targets = [...similarItems, ...collectionItems];
+    if (targets.length > 0) {
+      prefetchOfficialRoMeta(targets);
+    }
+  }, [lang, similarItems, collectionItems]);
 
   // Pre-warm PlaybackInfo + Direct Play header while user reads details (Netflix-instant Play)
   useEffect(() => {
@@ -501,8 +527,19 @@ export const DetailModal: React.FC<DetailModalProps> = ({
                       : 'text-2xl sm:text-4xl font-black tracking-tight text-white drop-shadow-md'
                   }
                 >
-                  {item.name}
+                  {displayTitle}
                 </h2>
+                {originalTitle && (
+                  <p
+                    className={
+                      isTv
+                        ? 'mt-1 text-base font-medium text-zinc-400'
+                        : 'mt-1 text-xs sm:text-sm font-medium text-zinc-400'
+                    }
+                  >
+                    {originalTitle}
+                  </p>
+                )}
 
                 {/* Metadata Strip (Year · Season · Runtime · Rating · Score · Ends at HH:MM) */}
                 <div
@@ -1279,7 +1316,7 @@ export const DetailModal: React.FC<DetailModalProps> = ({
                         )}
                       </div>
                       <p className="mt-1.5 truncate text-xs font-bold text-white group-hover:text-violet-300">
-                        {colItem.name}
+                        {getLocalizedTitleInfo(colItem, lang).title}
                       </p>
                       {colItem.year && (
                         <p className="text-[11px] text-zinc-400">{colItem.year}</p>
@@ -1583,7 +1620,7 @@ export const DetailModal: React.FC<DetailModalProps> = ({
                       )}
                     </div>
                     <p className="tv-card-title mt-2 truncate text-xs sm:text-sm font-bold text-zinc-200 group-hover:text-white">
-                      {sim.name}
+                      {getLocalizedTitleInfo(sim, lang).title}
                     </p>
                     {sim.year && <p className="text-xs text-zinc-400">{sim.year}</p>}
                   </button>

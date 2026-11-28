@@ -1,23 +1,93 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import { formatOverviewText, type AppLanguage } from '../i18n';
 import {
+  ensureOfficialRoMeta,
+  getCachedOfficialRoMeta,
+  getLocalizedTitleInfo,
+  getOfficialRoMetaVersion,
+  subscribeOfficialRoMeta,
+} from '../services/tmdb';
+import {
   getCachedTagTranslation,
   getCachedTranslation,
   translateTagsBatch,
   translateText,
 } from '../services/translate';
+import type { MediaItem } from '../types/media';
+
+/**
+ * Subscribes to official Romanian metadata updates (TMDB / Wikidata) when active.
+ */
+export function useOfficialRoMetaVersion(enabled: boolean): number {
+  const [version, setVersion] = useState(() => getOfficialRoMetaVersion());
+
+  useEffect(() => {
+    if (!enabled) return;
+    setVersion(getOfficialRoMetaVersion());
+    return subscribeOfficialRoMeta(() => {
+      setVersion(getOfficialRoMetaVersion());
+    });
+  }, [enabled]);
+
+  return version;
+}
+
+/**
+ * Resolves official Romanian title (plus original title when different) and
+ * official human-written Romanian overview/tagline from TMDB (or Wikidata fallback).
+ */
+export function useLocalizedMediaMeta(
+  item: Pick<MediaItem, 'name' | 'type' | 'tmdbId' | 'imdbId'>,
+  lang: AppLanguage,
+  overrideIds?: { tmdbId?: string; imdbId?: string }
+): {
+  title: string;
+  originalTitle: string | null;
+  officialOverview?: string;
+  officialTagline?: string;
+} {
+  const version = useOfficialRoMetaVersion(lang === 'ro');
+  const tmdbId = overrideIds?.tmdbId || item.tmdbId;
+  const imdbId = overrideIds?.imdbId || item.imdbId;
+
+  useEffect(() => {
+    if (lang !== 'ro') return;
+    if (item.type !== 'Movie' && item.type !== 'Series') return;
+    if (!tmdbId && !imdbId) return;
+    void ensureOfficialRoMeta({ type: item.type, tmdbId, imdbId }, 'high');
+  }, [lang, item.type, tmdbId, imdbId]);
+
+  return useMemo(() => {
+    void version;
+    if (lang !== 'ro') {
+      return { title: item.name, originalTitle: null };
+    }
+    const { title, originalTitle } = getLocalizedTitleInfo(item, lang, { tmdbId, imdbId });
+    const meta = getCachedOfficialRoMeta({ type: item.type, tmdbId, imdbId });
+    return {
+      title,
+      originalTitle,
+      officialOverview: meta?.overview,
+      officialTagline: meta?.tagline,
+    };
+  }, [version, lang, item.name, item.type, tmdbId, imdbId]);
+}
 
 /**
  * Translates dynamic media text (overview / tagline) into the active UI language
  * with synchronous cache lookup on render (zero flicker) and automatic cancellation.
+ * If an official human-written text is provided (e.g. from TMDB ro-RO), it is returned
+ * immediately without calling machine translation.
  */
 export function useTranslatedText(
   text: string | undefined,
   lang: AppLanguage,
-  priority: 'high' | 'normal' = 'high'
+  priority: 'high' | 'normal' = 'high',
+  officialText?: string
 ): string {
   const source = text || '';
-  const syncHit = getCachedTranslation(source, lang);
+  const official = officialText?.trim() || '';
+  const syncHit = official ? official : getCachedTranslation(source, lang);
 
   const [resolved, setResolved] = useState<{
     source: string;

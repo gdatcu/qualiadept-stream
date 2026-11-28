@@ -1,8 +1,10 @@
 import React, { useRef } from 'react';
 import { Check, ChevronLeft, ChevronRight, Heart, Layers, Play, Star, X } from 'lucide-react';
 import { useI18n } from '../i18n';
+import { getLocalizedTitleInfo } from '../services/tmdb';
 import type { MediaItem } from '../types/media';
 import { isTizenTv } from '../utils/tvNavigation';
+import { useOfficialRoMetaVersion } from './TranslatedOverview';
 
 interface MediaRowProps {
   title: string;
@@ -27,7 +29,8 @@ export const MediaRow: React.FC<MediaRowProps> = React.memo(({
 }) => {
   const rowRef = useRef<HTMLDivElement>(null);
   const isTv = isTizenTv();
-  const { t } = useI18n();
+  const { lang, t } = useI18n();
+  useOfficialRoMetaVersion(lang === 'ro');
 
   if (items.length === 0) return null;
 
@@ -115,7 +118,7 @@ export const MediaRow: React.FC<MediaRowProps> = React.memo(({
                 {thumbSrc ? (
                   <img
                     src={thumbSrc}
-                    alt={item.name}
+                    alt={getLocalizedTitleInfo(item, lang).title}
                     loading="lazy"
                     decoding="async"
                     onError={(e) => {
@@ -130,7 +133,7 @@ export const MediaRow: React.FC<MediaRowProps> = React.memo(({
                 ) : (
                   <div className="flex h-full w-full items-center justify-center p-4 text-center">
                     <span className="text-sm font-bold text-zinc-300 line-clamp-3">
-                      {item.name}
+                      {getLocalizedTitleInfo(item, lang).title}
                     </span>
                   </div>
                 )}
@@ -282,7 +285,9 @@ export const MediaRow: React.FC<MediaRowProps> = React.memo(({
                       : 'truncate text-sm font-bold text-white'
                   }
                 >
-                  {item.type === 'Episode' && item.seriesName ? item.seriesName : item.name}
+                  {item.type === 'Episode' && item.seriesName
+                    ? item.seriesName
+                    : getLocalizedTitleInfo(item, lang).title}
                 </h3>
                 <div
                   className={

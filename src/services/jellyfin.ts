@@ -28,7 +28,7 @@ import {
 
 const SESSION_STORAGE_KEY = 'qualiadept_stream_session_v1';
 const SAVED_PROFILES_KEY = 'qualiadept_stream_profiles_v1';
-const LIBRARY_CACHE_PREFIX = 'qualiadept_library_cache_v2_';
+const LIBRARY_CACHE_PREFIX = 'qualiadept_library_cache_v3_';
 const DEVICE_ID_KEY = 'qualiadept_stream_device_id';
 const DEMO_FAVORITES_KEY = 'qualiadept_demo_favorites';
 
@@ -418,6 +418,10 @@ interface RawJellyfinItem {
   BackdropImageTags?: string[];
   ParentBackdropImageTags?: string[];
   ParentBackdropItemId?: string;
+  ProviderIds?: {
+    Imdb?: string;
+    Tmdb?: string;
+  };
   UserData?: {
     IsFavorite?: boolean;
     Played?: boolean;
@@ -499,6 +503,8 @@ function mapJellyfinItem(raw: RawJellyfinItem, session: AuthSession): MediaItem 
     seriesName: raw.SeriesName,
     seasonNumber: raw.ParentIndexNumber,
     episodeNumber: raw.IndexNumber,
+    tmdbId: raw.ProviderIds?.Tmdb,
+    imdbId: raw.ProviderIds?.Imdb,
   };
 }
 
@@ -547,7 +553,7 @@ export async function fetchLibraryItems(
     Recursive: 'true',
     SortBy: 'DateCreated,SortName',
     SortOrder: 'Descending',
-    Fields: 'Overview,Genres,RunTimeTicks,OfficialRating,CommunityRating,UserData',
+    Fields: 'Overview,Genres,RunTimeTicks,OfficialRating,CommunityRating,UserData,ProviderIds',
     Limit: '1000',
   });
   if (parentId) {
@@ -575,7 +581,7 @@ export async function fetchCollections(session: AuthSession): Promise<MediaItem[
       Recursive: 'true',
       SortBy: 'SortName',
       SortOrder: 'Ascending',
-      Fields: 'Overview,Genres,CommunityRating,UserData',
+      Fields: 'Overview,Genres,CommunityRating,UserData,ProviderIds',
       Limit: '100',
     });
     const res = await fetch(
@@ -602,7 +608,7 @@ export async function fetchCollectionItems(
       ParentId: collectionId,
       SortBy: 'ProductionYear,SortName',
       SortOrder: 'Ascending',
-      Fields: 'Overview,Genres,RunTimeTicks,OfficialRating,CommunityRating,UserData',
+      Fields: 'Overview,Genres,RunTimeTicks,OfficialRating,CommunityRating,UserData,ProviderIds',
       Limit: '100',
     });
     const res = await fetch(
@@ -627,7 +633,7 @@ export async function fetchResumeItems(session: AuthSession): Promise<MediaItem[
   const params = new URLSearchParams({
     MediaTypes: 'Video',
     Limit: '20',
-    Fields: 'Overview,Genres,RunTimeTicks,UserData',
+    Fields: 'Overview,Genres,RunTimeTicks,UserData,ProviderIds',
   });
 
   const res = await fetchWithRetry(
@@ -649,7 +655,7 @@ export async function fetchNextUpEpisodes(session: AuthSession): Promise<MediaIt
     const params = new URLSearchParams({
       UserId: session.userId,
       Limit: '15',
-      Fields: 'Overview,Genres,RunTimeTicks,UserData',
+      Fields: 'Overview,Genres,RunTimeTicks,UserData,ProviderIds',
     });
     const res = await fetch(`${session.serverUrl}/Shows/NextUp?${params.toString()}`, {
       headers: { Authorization: buildAuthHeader(session.accessToken) },
@@ -693,7 +699,7 @@ export async function searchJellyfinCatalog(
       SearchTerm: trimmed,
       Recursive: 'true',
       IncludeItemTypes: 'Movie,Series,Video,BoxSet',
-      Fields: 'Overview,Genres,RunTimeTicks,OfficialRating,CommunityRating,UserData',
+      Fields: 'Overview,Genres,RunTimeTicks,OfficialRating,CommunityRating,UserData,ProviderIds',
       Limit: '30',
     });
     const personParams = new URLSearchParams({
@@ -1001,7 +1007,7 @@ export async function fetchSimilarItems(
     const params = new URLSearchParams({
       userId: session.userId,
       Limit: '12',
-      Fields: 'Overview,Genres,RunTimeTicks,OfficialRating,CommunityRating,UserData',
+      Fields: 'Overview,Genres,RunTimeTicks,OfficialRating,CommunityRating,UserData,ProviderIds',
     });
     const res = await fetch(
       `${session.serverUrl}/Items/${itemId}/Similar?${params.toString()}`,
@@ -1029,7 +1035,7 @@ export async function fetchPersonItems(
       IncludeItemTypes: 'Movie,Series',
       SortBy: 'ProductionYear,SortName',
       SortOrder: 'Descending',
-      Fields: 'Overview,Genres,RunTimeTicks,OfficialRating,CommunityRating,UserData',
+      Fields: 'Overview,Genres,RunTimeTicks,OfficialRating,CommunityRating,UserData,ProviderIds',
       Limit: '24',
     });
     const res = await fetch(

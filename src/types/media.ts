@@ -117,6 +117,9 @@ export interface MediaItem {
   seriesName?: string;
   seasonNumber?: number;
   episodeNumber?: number;
+  /** External metadata IDs from Jellyfin ProviderIds */
+  tmdbId?: string;
+  imdbId?: string;
   /** Direct demo stream URL (only in Demo Mode) */
   demoStreamUrl?: string;
   demoSubtitles?: SubtitleTrack[];

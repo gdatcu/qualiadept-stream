@@ -38,7 +38,9 @@ import {
   listOfflineRecords,
   subscribeOfflineDownloads,
 } from './services/offlineDownloads';
+import { getLocalizedTitleInfo, prefetchOfficialRoMeta } from './services/tmdb';
 import { getCachedTranslation } from './services/translate';
+import { useOfficialRoMetaVersion } from './components/TranslatedOverview';
 import type {
   AuthSession,
   LibraryView,
@@ -109,6 +111,7 @@ const AppContent: React.FC<AppContentProps> = ({
   setSwitchingProfile,
 }) => {
   const { lang, t } = useI18n();
+  const roMetaVersion = useOfficialRoMetaVersion(lang === 'ro');
   const tRef = useRef(t);
   tRef.current = t;
   const [sessionNotice, setSessionNotice] = useState<string | null>(null);
@@ -663,7 +666,17 @@ const AppContent: React.FC<AppContentProps> = ({
       .sort((a, b) => b.count - a.count || a.name.localeCompare(b.name));
   }, [tabBaseItems]);
 
+  // Background-enrich catalog items with official Romanian titles (TMDB / Wikidata) when in RO mode
+  useEffect(() => {
+    if (lang !== 'ro') return;
+    const targets = [...items, ...resumeItems, ...remoteSearchItems];
+    if (targets.length > 0) {
+      prefetchOfficialRoMeta(targets);
+    }
+  }, [lang, items, resumeItems, remoteSearchItems]);
+
   const filteredItems = useMemo(() => {
+    void roMetaVersion;
     if (selectedSearchPerson) {
       return selectedSearchPersonItems;
     }
@@ -678,8 +691,10 @@ const AppContent: React.FC<AppContentProps> = ({
       if (selectedGenre && !item.genres.includes(selectedGenre)) return false;
       if (!q) return true;
       const cachedRoOverview = getCachedTranslation(item.overview, 'ro');
+      const roTitle = getLocalizedTitleInfo(item, 'ro').title;
       return (
         fold(item.name).includes(q) ||
+        (roTitle !== item.name ? fold(roTitle).includes(q) : false) ||
         fold(item.overview).includes(q) ||
         (cachedRoOverview ? fold(cachedRoOverview).includes(q) : false) ||
         String(item.year || '').includes(q) ||
@@ -1277,7 +1292,7 @@ const AppContent: React.FC<AppContentProps> = ({
                         {item.posterUrl ? (
                           <img
                             src={item.posterUrl}
-                            alt={item.name}
+                            alt={getLocalizedTitleInfo(item, lang).title}
                             loading="lazy"
                             decoding="async"
                             className="h-full w-full object-cover"
@@ -1285,7 +1300,7 @@ const AppContent: React.FC<AppContentProps> = ({
                         ) : (
                           <div className="flex h-full w-full items-center justify-center p-4 text-center">
                             <span className="text-sm font-bold text-zinc-300 line-clamp-3">
-                              {item.name}
+                              {getLocalizedTitleInfo(item, lang).title}
                             </span>
                           </div>
                         )}
@@ -1328,7 +1343,7 @@ const AppContent: React.FC<AppContentProps> = ({
                               : 'truncate text-sm font-semibold text-white'
                           }
                         >
-                          {item.name}
+                          {getLocalizedTitleInfo(item, lang).title}
                         </p>
                         <p
                           className={
