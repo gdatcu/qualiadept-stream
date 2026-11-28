@@ -57,6 +57,7 @@ import type {
 } from '../types/media';
 import { getRecommendedQuality } from '../utils/network';
 import { isTizenTv } from '../utils/tvNavigation';
+import { TranslatedOverview, useTranslatedText } from './TranslatedOverview';
 
 interface DetailModalProps {
   session: AuthSession;
@@ -144,6 +145,8 @@ export const DetailModal: React.FC<DetailModalProps> = ({
 
   // Rich Jellyfin metadata (Cast & Crew, Specs, Tracks, Tagline, Tags, Trailers, Similar)
   const [details, setDetails] = useState<MediaItemDetails | null>(null);
+  const translatedOverview = useTranslatedText(item.overview, lang, 'high');
+  const translatedTagline = useTranslatedText(details?.tagline, lang, 'high');
   const [similarItems, setSimilarItems] = useState<MediaItem[]>([]);
   const [selectedAudioIndex, setSelectedAudioIndex] = useState<number | null>(null);
   const [selectedSubtitleIndex, setSelectedSubtitleIndex] = useState<number | null>(null);
@@ -923,9 +926,9 @@ export const DetailModal: React.FC<DetailModalProps> = ({
 
           {/* Tagline, Overview & Genres */}
           <div>
-            {details?.tagline && (
+            {translatedTagline && (
               <p className="mb-2 text-base sm:text-lg font-semibold italic text-zinc-200">
-                “{details.tagline}”
+                “{translatedTagline}”
               </p>
             )}
             <p
@@ -935,7 +938,7 @@ export const DetailModal: React.FC<DetailModalProps> = ({
                   : 'text-sm sm:text-[15px] leading-relaxed text-zinc-300'
               }
             >
-              {formatOverviewText(item.overview, lang)}
+              {formatOverviewText(translatedOverview, lang)}
             </p>
 
             {item.genres.length > 0 && (
@@ -1180,7 +1183,7 @@ export const DetailModal: React.FC<DetailModalProps> = ({
                               isTv ? 'text-sm leading-relaxed' : 'text-xs text-zinc-400'
                             }`}
                           >
-                            {formatOverviewText(ep.overview, lang)}
+                            <TranslatedOverview text={ep.overview} lang={lang} />
                           </p>
                         </div>
 

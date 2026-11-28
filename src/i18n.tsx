@@ -42,9 +42,14 @@ export function getSavedLanguageForProfile(
 }
 
 let currentActiveLanguage: AppLanguage = detectInitialDefaultLanguage();
+let currentHiddenSession = false;
 
 export function getAppLanguage(): AppLanguage {
   return currentActiveLanguage;
+}
+
+export function isHiddenLanguageSession(): boolean {
+  return currentHiddenSession;
 }
 
 export function getAcceptLanguageHeader(): string {
@@ -837,6 +842,7 @@ export const I18nProvider: React.FC<{
 
   // Automatically restore each family member's preferred language when switching profiles!
   useEffect(() => {
+    currentHiddenSession = Boolean(isHiddenProfile);
     const profileLang = getSavedLanguageForProfile(activeUserId, isHiddenProfile);
     currentActiveLanguage = profileLang;
     setLangState(profileLang);

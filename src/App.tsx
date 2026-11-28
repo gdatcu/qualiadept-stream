@@ -38,6 +38,7 @@ import {
   listOfflineRecords,
   subscribeOfflineDownloads,
 } from './services/offlineDownloads';
+import { getCachedTranslation } from './services/translate';
 import type {
   AuthSession,
   LibraryView,
@@ -676,9 +677,11 @@ const AppContent: React.FC<AppContentProps> = ({
     const localMatched = tabBaseItems.filter((item) => {
       if (selectedGenre && !item.genres.includes(selectedGenre)) return false;
       if (!q) return true;
+      const cachedRoOverview = getCachedTranslation(item.overview, 'ro');
       return (
         fold(item.name).includes(q) ||
         fold(item.overview).includes(q) ||
+        (cachedRoOverview ? fold(cachedRoOverview).includes(q) : false) ||
         String(item.year || '').includes(q) ||
         item.genres.some(
           (g) =>

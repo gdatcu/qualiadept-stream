@@ -3,6 +3,7 @@ import { Check, Info, Play, Plus, Star } from 'lucide-react';
 import { formatOverviewText, translateGenre, useI18n } from '../i18n';
 import type { MediaItem } from '../types/media';
 import { isTizenTv } from '../utils/tvNavigation';
+import { useTranslatedText } from './TranslatedOverview';
 
 interface HeroBannerProps {
   item: MediaItem;
@@ -20,6 +21,7 @@ export const HeroBanner: React.FC<HeroBannerProps> = ({
   const [imgFailed, setImgFailed] = useState(false);
   const isTv = isTizenTv();
   const { lang, t } = useI18n();
+  const translatedOverview = useTranslatedText(item.overview, lang, 'high');
 
   useEffect(() => {
     setImgFailed(false);
@@ -138,7 +140,7 @@ export const HeroBanner: React.FC<HeroBannerProps> = ({
                 : 'mt-4 line-clamp-3 text-sm leading-relaxed text-zinc-200 sm:text-base'
             }
           >
-            {formatOverviewText(item.overview, lang)}
+            {formatOverviewText(translatedOverview, lang)}
           </p>
 
           {!isTv && item.genres.length > 0 && (
