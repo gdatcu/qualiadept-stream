@@ -1837,34 +1837,55 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
     }
 
     const controller = new AbortController();
+    let gotFirstCue = false;
     setLoadingSubtitles(true);
     setSubtitleCues([]);
-    flashAdaptiveNotice(`Extracting subtitles: ${selectedSub.label}...`);
+
+    const localizedLabel = localizeTrackLabel(selectedSub.label, selectedSub.language, lang);
 
     const authHeader =
       !session.isDemo && session.accessToken
         ? `MediaBrowser Client="Qualiadept Stream", Device="Web", DeviceId="qualiadept-web", Version="1.0.0", Token="${session.accessToken}"`
         : undefined;
 
-    fetchSubtitleCues(selectedSub.url, authHeader, controller.signal)
+    fetchSubtitleCues(selectedSub.url, authHeader, controller.signal, (partialCues) => {
+      if (controller.signal.aborted || partialCues.length === 0) return;
+      setSubtitleCues(partialCues);
+      if (!gotFirstCue) {
+        gotFirstCue = true;
+        setLoadingSubtitles(false);
+      }
+    })
       .then((cues) => {
         if (controller.signal.aborted) return;
         setSubtitleCues(cues);
         setLoadingSubtitles(false);
-        flashAdaptiveNotice(`Subtitles ready: ${selectedSub.label} (${cues.length} lines)`);
+        if (!gotFirstCue) {
+          flashAdaptiveNotice(
+            lang === 'ro'
+              ? `Subtitrare activă: ${localizedLabel}`
+              : `Subtitles ready: ${localizedLabel}`
+          );
+        }
       })
       .catch((err) => {
         if (controller.signal.aborted) return;
         setLoadingSubtitles(false);
-        setSubtitleCues([]);
-        const reason = err instanceof Error && err.message ? ` (${err.message})` : '';
-        flashAdaptiveNotice(`Subtitles took too long${reason} · tap Audio & Subtitles to retry`);
+        if (!gotFirstCue) {
+          setSubtitleCues([]);
+          const reason = err instanceof Error && err.message ? ` (${err.message})` : '';
+          flashAdaptiveNotice(
+            lang === 'ro'
+              ? `Subtitrarea a durat prea mult${reason} · apasă Audio și subtitrări pt. reîncercare`
+              : `Subtitles took too long${reason} · tap Audio & Subtitles to retry`
+          );
+        }
       });
 
     return () => {
       controller.abort();
     };
-  }, [activeTextSubIndex, playback, session, flashAdaptiveNotice]);
+  }, [activeTextSubIndex, playback, session, flashAdaptiveNotice, lang]);
 
   const effectiveAudioIndex = selectedAudioIndex ?? playback?.defaultAudioIndex ?? null;
 

@@ -50,6 +50,49 @@ function sanitizeCueText(raw: string): string {
     .trim();
 }
 
+function parseSingleBlock(block: string): SubtitleCue | null {
+  const lines = block
+    .split('\n')
+    .map((l) => l.trimEnd())
+    .filter((l) => l.trim().length > 0);
+
+  if (lines.length === 0) return null;
+  const first = lines[0].trim();
+  if (
+    first.startsWith('WEBVTT') ||
+    first.startsWith('NOTE') ||
+    first.startsWith('STYLE') ||
+    first.startsWith('REGION')
+  ) {
+    return null;
+  }
+
+  // Find the timing line ("00:01:23.450 --> 00:01:26.100 ...")
+  const timeLineIdx = lines.findIndex((l) => l.includes('-->'));
+  if (timeLineIdx === -1) return null;
+
+  const timeLine = lines[timeLineIdx];
+  const [startPart, endAndSettings] = timeLine.split('-->');
+  if (!startPart || !endAndSettings) return null;
+
+  const endToken = endAndSettings.trim().split(/\s+/)[0];
+  const start = parseTimestamp(startPart);
+  const end = parseTimestamp(endToken);
+  if (start === null || end === null || end <= start) return null;
+
+  const textLines = lines
+    .slice(timeLineIdx + 1)
+    .map(sanitizeCueText)
+    .filter(Boolean);
+
+  if (textLines.length === 0) return null;
+  return {
+    start,
+    end,
+    text: textLines.join('\n'),
+  };
+}
+
 export function parseWebVtt(vttContent: string): SubtitleCue[] {
   const normalized = vttContent
     .replace(/^\uFEFF/, '')
@@ -60,47 +103,8 @@ export function parseWebVtt(vttContent: string): SubtitleCue[] {
   const cues: SubtitleCue[] = [];
 
   for (const block of blocks) {
-    const lines = block
-      .split('\n')
-      .map((l) => l.trimEnd())
-      .filter((l) => l.trim().length > 0);
-
-    if (lines.length === 0) continue;
-    const first = lines[0].trim();
-    if (
-      first.startsWith('WEBVTT') ||
-      first.startsWith('NOTE') ||
-      first.startsWith('STYLE') ||
-      first.startsWith('REGION')
-    ) {
-      continue;
-    }
-
-    // Find the timing line ("00:01:23.450 --> 00:01:26.100 ...")
-    const timeLineIdx = lines.findIndex((l) => l.includes('-->'));
-    if (timeLineIdx === -1) continue;
-
-    const timeLine = lines[timeLineIdx];
-    const [startPart, endAndSettings] = timeLine.split('-->');
-    if (!startPart || !endAndSettings) continue;
-
-    const endToken = endAndSettings.trim().split(/\s+/)[0];
-    const start = parseTimestamp(startPart);
-    const end = parseTimestamp(endToken);
-    if (start === null || end === null || end <= start) continue;
-
-    const textLines = lines
-      .slice(timeLineIdx + 1)
-      .map(sanitizeCueText)
-      .filter(Boolean);
-
-    if (textLines.length > 0) {
-      cues.push({
-        start,
-        end,
-        text: textLines.join('\n'),
-      });
-    }
+    const parsed = parseSingleBlock(block);
+    if (parsed) cues.push(parsed);
   }
 
   return cues.sort((a, b) => a.start - b.start);
@@ -108,24 +112,133 @@ export function parseWebVtt(vttContent: string): SubtitleCue[] {
 
 const subtitleCueCache = new Map<string, SubtitleCue[]>();
 
-/**
- * Fetch WebVTT / SRT subtitles from Jellyfin with in-memory caching, fallback URL formats
- * (.vtt with/without /0/ and raw .srt), and a generous 90s timeout for large Google Drive MKVs.
- */
-export async function fetchSubtitleCues(
-  primaryUrl: string,
-  authHeader?: string,
-  signal?: AbortSignal
-): Promise<SubtitleCue[]> {
-  const cacheKey = primaryUrl.split('?')[0];
-  const cached = subtitleCueCache.get(cacheKey);
-  if (cached && cached.length > 0) {
-    return cached;
+interface InFlightSubtitleEntry {
+  promise: Promise<SubtitleCue[]>;
+  latestCues: SubtitleCue[];
+  listeners: Set<(cues: SubtitleCue[]) => void>;
+}
+
+const inFlightSubtitles = new Map<string, InFlightSubtitleEntry>();
+
+function emitProgress(entry: InFlightSubtitleEntry, cues: SubtitleCue[]): void {
+  entry.latestCues = cues;
+  for (const listener of entry.listeners) {
+    listener(cues);
   }
+}
+
+async function streamSubtitleUrl(
+  url: string,
+  authHeader: string | undefined,
+  entry: InFlightSubtitleEntry
+): Promise<SubtitleCue[]> {
+  const controller = new AbortController();
+  const IDLE_TIMEOUT_MS = 45_000;
+  const MAX_TOTAL_TIMEOUT_MS = 180_000;
+
+  let idleTimer = window.setTimeout(() => controller.abort(), IDLE_TIMEOUT_MS);
+  const totalTimer = window.setTimeout(() => controller.abort(), MAX_TOTAL_TIMEOUT_MS);
+  const resetIdle = () => {
+    window.clearTimeout(idleTimer);
+    idleTimer = window.setTimeout(() => controller.abort(), IDLE_TIMEOUT_MS);
+  };
+
+  try {
+    const headers: Record<string, string> = {};
+    if (authHeader) {
+      headers.Authorization = authHeader;
+    }
+    const res = await fetch(url, {
+      headers,
+      signal: controller.signal,
+    });
+    if (!res.ok) {
+      throw new Error(`HTTP ${res.status}`);
+    }
+
+    const reader = res.body?.getReader();
+    if (!reader) {
+      const text = await res.text();
+      const cues = parseWebVtt(text);
+      if (cues.length > 0) emitProgress(entry, cues);
+      return cues;
+    }
+
+    const decoder = new TextDecoder('utf-8');
+    const cues: SubtitleCue[] = [];
+    let pending = '';
+    let lastEmitAt = 0;
+    let emittedCount = 0;
+    let isFirstChunk = true;
+
+    const flushPendingBlocks = (flushAll: boolean) => {
+      const normalized = pending.replace(/\r\n/g, '\n').replace(/\r/g, '\n');
+      const parts = normalized.split(/\n{2,}/);
+      if (flushAll) {
+        pending = '';
+      } else {
+        pending = parts.pop() || '';
+      }
+      for (const block of parts) {
+        const parsed = parseSingleBlock(block);
+        if (parsed) cues.push(parsed);
+      }
+
+      if (cues.length > emittedCount) {
+        const now = Date.now();
+        // Emit immediately when the very first cue arrives so subtitles appear in ~1-2s,
+        // then throttle progressive updates to every 250ms to keep UI silky smooth.
+        if (emittedCount === 0 || flushAll || now - lastEmitAt >= 250) {
+          emittedCount = cues.length;
+          lastEmitAt = now;
+          emitProgress(entry, [...cues]);
+        }
+      }
+    };
+
+    while (true) {
+      const { done, value } = await reader.read();
+      resetIdle();
+      if (done) {
+        pending += decoder.decode();
+        flushPendingBlocks(true);
+        break;
+      }
+      if (value) {
+        let chunk = decoder.decode(value, { stream: true });
+        if (isFirstChunk) {
+          chunk = chunk.replace(/^\uFEFF/, '');
+          isFirstChunk = false;
+        }
+        pending += chunk;
+        if (pending.includes('\n\n') || pending.includes('\r\n\r\n')) {
+          flushPendingBlocks(false);
+        }
+      }
+    }
+
+    cues.sort((a, b) => a.start - b.start);
+    return cues;
+  } finally {
+    window.clearTimeout(idleTimer);
+    window.clearTimeout(totalTimer);
+  }
+}
+
+function startSharedSubtitleFetch(
+  primaryUrl: string,
+  authHeader?: string
+): InFlightSubtitleEntry {
+  const cacheKey = primaryUrl.split('?')[0];
+  const existing = inFlightSubtitles.get(cacheKey);
+  if (existing) return existing;
 
   const candidateUrls: string[] = [primaryUrl];
   // Alternate 1: Jellyfin endpoint without the /0/ startPositionTicks segment
-  const altNoZero = primaryUrl.replace(/\/Subtitles\/(\d+)\/0\/Stream\.vtt/i, '/Subtitles/$1/Stream.vtt');
+  const altNoZero = primaryUrl.replace(
+    /\/Subtitles\/(\d+)\/0\/Stream\.vtt/i,
+    '/Subtitles/$1/Stream.vtt'
+  );
   if (altNoZero !== primaryUrl) {
     candidateUrls.push(altNoZero);
   }
@@ -135,45 +248,111 @@ export async function fetchSubtitleCues(
     candidateUrls.push(altSrt);
   }
 
-  let lastError: Error | null = null;
+  const entry: InFlightSubtitleEntry = {
+    promise: Promise.resolve([]),
+    latestCues: [],
+    listeners: new Set(),
+  };
 
-  for (const url of candidateUrls) {
-    try {
-      const controller = new AbortController();
-      const timeout = window.setTimeout(() => controller.abort(), 90_000);
-      const onExternalAbort = () => controller.abort();
-      signal?.addEventListener('abort', onExternalAbort, { once: true });
-
+  entry.promise = (async () => {
+    let lastError: Error | null = null;
+    for (const url of candidateUrls) {
       try {
-        const headers: Record<string, string> = {};
-        if (authHeader) {
-          headers.Authorization = authHeader;
-        }
-        const res = await fetch(url, {
-          headers,
-          signal: controller.signal,
-        });
-        if (!res.ok) {
-          throw new Error(`HTTP ${res.status}`);
-        }
-        const text = await res.text();
-        const cues = parseWebVtt(text);
+        const cues = await streamSubtitleUrl(url, authHeader, entry);
         if (cues.length > 0) {
           subtitleCueCache.set(cacheKey, cues);
+          emitProgress(entry, cues);
           return cues;
         }
         lastError = new Error('Subtitle track returned no cues');
-      } finally {
-        window.clearTimeout(timeout);
-        signal?.removeEventListener('abort', onExternalAbort);
+      } catch (err) {
+        lastError = err instanceof Error ? err : new Error(String(err));
       }
-    } catch (err) {
-      if (signal?.aborted) throw err;
-      lastError = err instanceof Error ? err : new Error(String(err));
+    }
+    throw lastError || new Error('Failed to load subtitle track');
+  })().finally(() => {
+    inFlightSubtitles.delete(cacheKey);
+  });
+
+  inFlightSubtitles.set(cacheKey, entry);
+  return entry;
+}
+
+/**
+ * Warms a subtitle track in the background (e.g. while user reads DetailModal or
+ * nears the end of an episode) so playback starts with subtitles ready instantly.
+ */
+export function prefetchSubtitleCues(primaryUrl: string, authHeader?: string): void {
+  const cacheKey = primaryUrl.split('?')[0];
+  if (subtitleCueCache.has(cacheKey) || inFlightSubtitles.has(cacheKey)) return;
+  const entry = startSharedSubtitleFetch(primaryUrl, authHeader);
+  entry.promise.catch(() => {});
+}
+
+/**
+ * Fetch WebVTT / SRT subtitles from Jellyfin with progressive streaming (shows the
+ * first dialogue lines in ~1-2s instead of waiting for full MKV extraction),
+ * shared in-flight deduplication, and in-memory caching.
+ */
+export async function fetchSubtitleCues(
+  primaryUrl: string,
+  authHeader?: string,
+  signal?: AbortSignal,
+  onProgress?: (cues: SubtitleCue[]) => void
+): Promise<SubtitleCue[]> {
+  const cacheKey = primaryUrl.split('?')[0];
+  const cached = subtitleCueCache.get(cacheKey);
+  if (cached && cached.length > 0) {
+    return cached;
+  }
+
+  const entry = startSharedSubtitleFetch(primaryUrl, authHeader);
+
+  if (onProgress) {
+    entry.listeners.add(onProgress);
+    // Immediately deliver any cues already extracted by a background prefetch!
+    if (entry.latestCues.length > 0 && !signal?.aborted) {
+      onProgress(entry.latestCues);
     }
   }
 
-  throw lastError || new Error('Failed to load subtitle track');
+  const cleanup = () => {
+    if (onProgress) entry.listeners.delete(onProgress);
+  };
+
+  if (!signal) {
+    try {
+      return await entry.promise;
+    } finally {
+      cleanup();
+    }
+  }
+
+  if (signal.aborted) {
+    cleanup();
+    throw new DOMException('Aborted', 'AbortError');
+  }
+
+  return await new Promise<SubtitleCue[]>((resolve, reject) => {
+    const onAbort = () => {
+      cleanup();
+      reject(new DOMException('Aborted', 'AbortError'));
+    };
+    signal.addEventListener('abort', onAbort, { once: true });
+
+    entry.promise.then(
+      (cues) => {
+        signal.removeEventListener('abort', onAbort);
+        cleanup();
+        if (!signal.aborted) resolve(cues);
+      },
+      (err) => {
+        signal.removeEventListener('abort', onAbort);
+        cleanup();
+        if (!signal.aborted) reject(err);
+      }
+    );
+  });
 }
 
 export type SubtitleSize = 'sm' | 'md' | 'lg' | 'xl';
@@ -345,10 +524,11 @@ export function pickPreferredSubtitleTrack(
       (s) => normalizeSubtitleLang(s.language, s.label) === targetLang
     );
     if (matching.length > 0) {
-      // Rank: text > image, non-forced > forced, clean > SDH, default tie-breaker
+      // Rank: text > image, external sidecar (instant) > embedded MKV, non-forced > forced, clean > SDH
       const sorted = [...matching].sort((a, b) => {
         const score = (s: SubtitleTrack) =>
           (s.isText ? 100 : 0) +
+          (s.isExternal ? 60 : 0) +
           (!s.isForced ? 40 : 0) +
           (!isSdhOrHearingImpaired(s.label) ? 10 : 0) +
           (s.isDefault ? 5 : 0);

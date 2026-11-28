@@ -39,6 +39,8 @@ export interface SubtitleTrack {
   language: string;
   /** True for text subtitles (SRT/ASS/VTT) delivered as WebVTT; false for bitmap subtitles (PGS/VobSub) burned in via HLS */
   isText: boolean;
+  /** True for external sidecar .srt/.vtt files (instant load, no MKV extraction needed) */
+  isExternal?: boolean;
   codec?: string;
   isDefault?: boolean;
   isForced?: boolean;

@@ -19,13 +19,18 @@ import {
   type StreamPlayMethod,
   type SubtitleTrack,
 } from '../types/media';
-import { getAcceptLanguageHeader } from '../i18n';
+import { getAcceptLanguageHeader, getAppLanguage } from '../i18n';
 import {
   canMsePlayHevc,
   formatResolutionBadge,
   getDirectPlayVideoCodecs,
 } from '../utils/network';
-import { isRomanianTrack } from '../utils/subtitles';
+import {
+  isRomanianTrack,
+  loadSubtitlePreferences,
+  pickPreferredSubtitleTrack,
+  prefetchSubtitleCues,
+} from '../utils/subtitles';
 
 const SESSION_STORAGE_KEY = 'qualiadept_stream_session_v1';
 const SAVED_PROFILES_KEY = 'qualiadept_stream_profiles_v1';
@@ -964,6 +969,7 @@ export async function fetchItemDetails(
         label: formatSubtitleLabel(s),
         language: s.Language || 'und',
         isText: Boolean(s.IsTextSubtitleStream),
+        isExternal: Boolean(s.IsExternal),
         codec: s.Codec,
         isDefault: Boolean(s.IsDefault),
         isForced: Boolean(s.IsForced),
@@ -1138,6 +1144,7 @@ interface RawMediaStream {
   VideoRangeType?: string;
   IsDefault?: boolean;
   IsForced?: boolean;
+  IsExternal?: boolean;
   IsTextSubtitleStream?: boolean;
   DeliveryUrl?: string;
 }
@@ -1385,6 +1392,7 @@ async function fetchPlaybackInfoUncached(
         label: formatSubtitleLabel(s),
         language: s.Language || 'und',
         isText,
+        isExternal: Boolean(s.IsExternal),
         codec: s.Codec,
         isDefault: Boolean(s.IsDefault),
         isForced: Boolean(s.IsForced),
@@ -1548,6 +1556,19 @@ export function prefetchPlaybackInfo(
         fetch(info.streamUrl, {
           headers: { Range: 'bytes=0-131071' },
         }).catch(() => {});
+      }
+      // Also pre-warm the preferred/Romanian text subtitle so extraction starts while user reads details
+      const activeAudio =
+        info.audioTracks.find((a) => a.index === info.defaultAudioIndex) || info.audioTracks[0];
+      const subPrefs = loadSubtitlePreferences();
+      const preferredSub = pickPreferredSubtitleTrack(info.subtitles, {
+        preferredLanguage: subPrefs.preferredLanguage,
+        appLang: getAppLanguage(),
+        activeAudioLanguage: activeAudio?.language,
+        activeAudioLabel: activeAudio?.label,
+      });
+      if (preferredSub?.isText && preferredSub.url) {
+        prefetchSubtitleCues(preferredSub.url, buildAuthHeader(session.accessToken));
       }
       return info;
     })
@@ -2502,6 +2523,7 @@ export async function fetchFreshSubtitleTracks(
         label: formatSubtitleLabel(s),
         language: s.Language || 'und',
         isText,
+        isExternal: Boolean(s.IsExternal),
         codec: s.Codec,
         isDefault: Boolean(s.IsDefault),
         isForced: Boolean(s.IsForced),
