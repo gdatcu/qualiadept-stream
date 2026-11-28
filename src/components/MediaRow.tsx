@@ -1,5 +1,6 @@
 import React, { useRef } from 'react';
 import { Check, ChevronLeft, ChevronRight, Heart, Layers, Play, Star, X } from 'lucide-react';
+import { useI18n } from '../i18n';
 import type { MediaItem } from '../types/media';
 import { isTizenTv } from '../utils/tvNavigation';
 
@@ -26,6 +27,7 @@ export const MediaRow: React.FC<MediaRowProps> = React.memo(({
 }) => {
   const rowRef = useRef<HTMLDivElement>(null);
   const isTv = isTizenTv();
+  const { t } = useI18n();
 
   if (items.length === 0) return null;
 
@@ -160,7 +162,7 @@ export const MediaRow: React.FC<MediaRowProps> = React.memo(({
                     {onRemoveContinueWatching && (
                       <button
                         tabIndex={-1}
-                        title="Remove from Continue Watching"
+                        title={t.removeFromContinueWatching}
                         onClick={(e) => {
                           e.stopPropagation();
                           onRemoveContinueWatching(item);
@@ -173,7 +175,7 @@ export const MediaRow: React.FC<MediaRowProps> = React.memo(({
                     {onTogglePlayed && item.type !== 'BoxSet' && (
                       <button
                         tabIndex={-1}
-                        title={item.isPlayed ? 'Mark as unplayed' : 'Mark as played'}
+                        title={item.isPlayed ? t.markAsUnplayed : t.markAsPlayed}
                         onClick={(e) => {
                           e.stopPropagation();
                           onTogglePlayed(item);
@@ -190,7 +192,7 @@ export const MediaRow: React.FC<MediaRowProps> = React.memo(({
                     {onToggleFavorite && item.type !== 'BoxSet' && (
                       <button
                         tabIndex={-1}
-                        title={item.isFavorite ? 'Remove from Favorites' : 'Add to Favorites'}
+                        title={item.isFavorite ? t.removeFromMyList : t.addToMyList}
                         onClick={(e) => {
                           e.stopPropagation();
                           onToggleFavorite(item);
@@ -253,7 +255,7 @@ export const MediaRow: React.FC<MediaRowProps> = React.memo(({
                     }`}
                   >
                     <Layers className={isTv ? 'h-3.5 w-3.5' : 'h-3 w-3'} />
-                    Collection
+                    {t.collectionBadge}
                   </div>
                 )}
 
@@ -306,7 +308,7 @@ export const MediaRow: React.FC<MediaRowProps> = React.memo(({
                           : 'rounded-md bg-white/10 px-1.5 py-0.5 text-[10px] font-bold text-zinc-200'
                       }
                     >
-                      Series
+                      {t.seriesBadge}
                     </span>
                   )}
                   {item.runtimeMinutes && !isLandscape && (

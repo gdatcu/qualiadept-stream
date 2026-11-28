@@ -1,5 +1,18 @@
 import React, { useEffect, useState } from 'react';
-import { Bookmark, Crown, Download, Film, Home, LogOut, Search, Tv, Users, X } from 'lucide-react';
+import {
+  Bookmark,
+  Crown,
+  Download,
+  Film,
+  Globe,
+  Home,
+  LogOut,
+  Search,
+  Tv,
+  Users,
+  X,
+} from 'lucide-react';
+import { useI18n } from '../i18n';
 import { APP_VERSION_NAME, isCapacitorNativeApp } from '../services/appUpdate';
 import type { AuthSession } from '../types/media';
 import { isTizenTv } from '../utils/tvNavigation';
@@ -41,6 +54,7 @@ export const Navbar: React.FC<NavbarProps> = ({
   const [profileMenuOpen, setProfileMenuOpen] = useState(false);
   const isNativeApp = isCapacitorNativeApp();
   const isTv = isTizenTv();
+  const { lang, setLang, toggleLang, t } = useI18n();
 
   useEffect(() => {
     const onScroll = () => setScrolled(window.scrollY > 30);
@@ -49,12 +63,12 @@ export const Navbar: React.FC<NavbarProps> = ({
   }, []);
 
   const navItems: { id: NavTab; label: string }[] = [
-    { id: 'home', label: 'Home' },
-    { id: 'movies', label: 'Movies' },
-    { id: 'series', label: 'Series' },
-    { id: 'mylist', label: 'My List' },
-    ...(!isTv ? [{ id: 'downloads' as const, label: 'Downloads' }] : []),
-    ...(session.isAdmin && !session.isDemo ? [{ id: 'family' as const, label: 'Family' }] : []),
+    { id: 'home', label: t.navHome },
+    { id: 'movies', label: t.navMovies },
+    { id: 'series', label: t.navSeries },
+    { id: 'mylist', label: t.navMyList },
+    ...(!isTv ? [{ id: 'downloads' as const, label: t.navDownloads }] : []),
+    ...(session.isAdmin && !session.isDemo ? [{ id: 'family' as const, label: t.navFamily }] : []),
   ];
 
   const iconCls = isTv ? 'h-5 w-5' : 'h-4 w-4';
@@ -175,13 +189,13 @@ export const Navbar: React.FC<NavbarProps> = ({
               }`}
             >
               <Search className="h-5 w-5" />
-              <span>Search</span>
+              <span>{t.navSearch}</span>
             </button>
           </nav>
         )}
 
-        {/* Right: Search (non-TV) + Profile Switcher Menu */}
-        <div className="flex items-center gap-2.5 sm:gap-3">
+        {/* Right: Search (non-TV) + 1-Click Language Toggle + Profile Switcher Menu */}
+        <div className="flex items-center gap-2 sm:gap-2.5">
           {!isTv && (
             <>
               {searchOpen ? (
@@ -192,8 +206,8 @@ export const Navbar: React.FC<NavbarProps> = ({
                     type="text"
                     value={searchQuery}
                     onChange={(e) => onSearchChange(e.target.value)}
-                    placeholder="Search titles, actors, year..."
-                    className="w-36 sm:w-56 bg-transparent px-2.5 text-sm text-white placeholder-zinc-500 outline-none"
+                    placeholder={t.searchPlaceholderShort}
+                    className="w-32 sm:w-56 bg-transparent px-2.5 text-sm text-white placeholder-zinc-500 outline-none"
                   />
                   <button
                     onClick={() => {
@@ -208,7 +222,7 @@ export const Navbar: React.FC<NavbarProps> = ({
               ) : (
                 <button
                   onClick={() => setSearchOpen(true)}
-                  aria-label="Search"
+                  aria-label={t.navSearch}
                   className="flex items-center gap-1.5 rounded-xl p-2 text-zinc-200 transition hover:bg-white/15 hover:text-white"
                 >
                   <Search className="h-4 w-4 sm:h-5 sm:w-5" />
@@ -217,9 +231,26 @@ export const Navbar: React.FC<NavbarProps> = ({
             </>
           )}
 
+          {/* 1-Click Language Switcher Pill (EN / RO) */}
+          {(!searchOpen || isTv) && (
+            <button
+              data-tv-pill={isTv ? 'true' : undefined}
+              onClick={toggleLang}
+              title={`${t.langLabel}: ${lang === 'ro' ? 'Română → English' : 'English → Română'}`}
+              className={
+                isTv
+                  ? 'flex items-center gap-2 rounded-full border border-white/15 bg-[#121626]/95 px-4 py-2.5 text-xs font-extrabold uppercase tracking-wider text-zinc-100 shadow-xl transition'
+                  : 'flex items-center gap-1.5 rounded-xl border border-white/15 bg-white/[0.07] px-2.5 py-1.5 text-xs font-bold uppercase tracking-wider text-zinc-200 transition hover:border-violet-400/50 hover:bg-white/15 hover:text-white'
+              }
+            >
+              <Globe className={isTv ? 'h-4 w-4 text-violet-300' : 'h-3.5 w-3.5 text-violet-300'} />
+              <span>{lang.toUpperCase()}</span>
+            </button>
+          )}
+
           {session.isDemo && (
             <span className="hidden sm:inline-flex items-center rounded-full border border-violet-500/40 bg-violet-500/15 px-2.5 py-1 text-xs font-semibold text-violet-300">
-              DEMO MODE
+              {t.demoMode}
             </span>
           )}
 
@@ -233,7 +264,7 @@ export const Navbar: React.FC<NavbarProps> = ({
                   ? 'gap-2.5 rounded-full border border-white/15 bg-[#121626]/95 py-1.5 pl-2 pr-4 text-white shadow-xl'
                   : 'gap-2 rounded-xl border border-white/15 bg-white/[0.07] px-2.5 py-1.5 hover:border-violet-400/50 hover:bg-white/15'
               }`}
-              title="Switch Profile or Manage Account"
+              title={t.switchProfile}
             >
               <div
                 className={`relative flex items-center justify-center rounded-full bg-gradient-to-br from-violet-500 to-fuchsia-500 font-extrabold text-white ${
@@ -270,21 +301,53 @@ export const Navbar: React.FC<NavbarProps> = ({
                   data-tv-scope={isTv ? 'modal' : undefined}
                   className={`absolute right-0 mt-2.5 z-50 rounded-2xl border border-white/20 shadow-2xl ${
                     isTv
-                      ? 'w-72 bg-[#101320] p-3'
-                      : 'w-56 bg-surface/95 p-2 backdrop-blur-xl'
+                      ? 'w-76 bg-[#101320] p-3.5'
+                      : 'w-60 bg-surface/95 p-2.5 backdrop-blur-xl'
                   }`}
                 >
-                  <div className="border-b border-white/10 px-3 py-2.5">
+                  <div className="border-b border-white/10 px-3 py-2">
                     <p className={`truncate font-bold text-white ${isTv ? 'text-base' : 'text-sm'}`}>
                       {session.username}
                     </p>
                     <p className={isTv ? 'text-xs text-zinc-400 mt-0.5' : 'text-[11px] text-zinc-400'}>
                       {session.isDemo
-                        ? 'Demo Preview'
+                        ? t.demoPreview
                         : session.isAdmin
-                        ? 'Server Administrator'
-                        : 'Family Member'}
+                        ? t.serverAdmin
+                        : t.familyMember}
                     </p>
+                  </div>
+
+                  {/* Per-Profile Language Selector (English / Română) */}
+                  <div className="border-b border-white/10 px-3 py-2.5">
+                    <div className="mb-1.5 flex items-center gap-1.5 text-[11px] font-bold uppercase tracking-wider text-zinc-400">
+                      <Globe className="h-3.5 w-3.5 text-violet-400" />
+                      <span>{t.langLabel}</span>
+                    </div>
+                    <div className="grid grid-cols-2 gap-1.5">
+                      <button
+                        data-tv-pill={isTv ? 'true' : undefined}
+                        onClick={() => setLang('en')}
+                        className={`rounded-xl px-2.5 py-1.5 text-xs font-bold transition ${
+                          lang === 'en'
+                            ? 'bg-violet-600 text-white shadow'
+                            : 'bg-white/5 text-zinc-300 hover:bg-white/10 hover:text-white'
+                        }`}
+                      >
+                        {t.langEnglish}
+                      </button>
+                      <button
+                        data-tv-pill={isTv ? 'true' : undefined}
+                        onClick={() => setLang('ro')}
+                        className={`rounded-xl px-2.5 py-1.5 text-xs font-bold transition ${
+                          lang === 'ro'
+                            ? 'bg-violet-600 text-white shadow'
+                            : 'bg-white/5 text-zinc-300 hover:bg-white/10 hover:text-white'
+                        }`}
+                      >
+                        {t.langRomanian}
+                      </button>
+                    </div>
                   </div>
 
                   <div className="mt-1.5 space-y-1">
@@ -300,7 +363,7 @@ export const Navbar: React.FC<NavbarProps> = ({
                       }`}
                     >
                       <Users className={isTv ? 'h-5 w-5 text-violet-400' : 'h-4 w-4 text-violet-400'} />
-                      Switch Profile
+                      {t.switchProfile}
                     </button>
 
                     {session.isAdmin && !session.isDemo && (
@@ -315,7 +378,7 @@ export const Navbar: React.FC<NavbarProps> = ({
                         }`}
                       >
                         <Crown className={isTv ? 'h-5 w-5 text-amber-400' : 'h-4 w-4 text-amber-400'} />
-                        Manage Family Accounts
+                        {t.manageFamilyAccounts}
                       </button>
                     )}
 
@@ -328,7 +391,7 @@ export const Navbar: React.FC<NavbarProps> = ({
                         className="flex w-full items-center gap-2.5 rounded-xl px-3 py-2 text-left text-xs font-semibold text-emerald-200 transition hover:bg-emerald-500/15"
                       >
                         <Download className="h-4 w-4 text-emerald-400" />
-                        Check for Updates
+                        {t.checkForUpdates}
                       </button>
                     )}
 
@@ -343,7 +406,7 @@ export const Navbar: React.FC<NavbarProps> = ({
                       }`}
                     >
                       <LogOut className={isTv ? 'h-5 w-5' : 'h-4 w-4'} />
-                      Sign Out
+                      {t.signOut}
                     </button>
                   </div>
 

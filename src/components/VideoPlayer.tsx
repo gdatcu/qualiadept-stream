@@ -81,18 +81,12 @@ import {
   type SubtitleSize,
   type SubtitleStyle,
 } from '../utils/subtitles';
+import { localizeTrackLabel, useI18n } from '../i18n';
 import { isTizenTv } from '../utils/tvNavigation';
 
 type AspectRatioMode = 'auto' | 'cover' | 'zoom' | 'fill';
 type RepeatMode = 'none' | 'one';
 type SettingsSubPanel = 'root' | 'quality' | 'aspect' | 'speed' | 'repeat';
-
-const ASPECT_RATIO_OPTIONS: Array<{ id: AspectRatioMode; label: string; description: string }> = [
-  { id: 'auto', label: 'Auto', description: 'Original picture aspect ratio' },
-  { id: 'cover', label: 'Cover / Fill', description: 'Eliminate black bars by filling screen' },
-  { id: 'zoom', label: 'Zoom (115%)', description: 'Slight cinematic zoom for ultrawide films' },
-  { id: 'fill', label: 'Stretch', description: 'Stretch video to fill full frame' },
-];
 
 const PLAYBACK_SPEEDS = [0.5, 0.75, 1, 1.25, 1.5, 1.75, 2];
 
@@ -153,6 +147,13 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
   onPlayNext,
   onToggleFavorite,
 }) => {
+  const { lang, t } = useI18n();
+  const aspectRatioOptions: Array<{ id: AspectRatioMode; label: string; description: string }> = [
+    { id: 'auto', label: t.aspectAuto, description: t.aspectAutoDesc },
+    { id: 'cover', label: t.aspectCover, description: t.aspectCoverDesc },
+    { id: 'zoom', label: t.aspectZoom, description: t.aspectZoomDesc },
+    { id: 'fill', label: t.aspectFill, description: t.aspectFillDesc },
+  ];
   const containerRef = useRef<HTMLDivElement>(null);
   const videoRef = useRef<HTMLVideoElement>(null);
   const hlsRef = useRef<Hls | null>(null);
@@ -1922,7 +1923,9 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
   const hasAudioOrSubs =
     Boolean(playback && (playback.audioTracks.length > 0 || playback.subtitles.length > 0));
   const activeQualityLabel =
-    QUALITY_OPTIONS.find((q) => q.id === quality)?.label || 'Original';
+    quality === 'auto'
+      ? t.originalQuality
+      : QUALITY_OPTIONS.find((q) => q.id === quality)?.label || t.originalQuality;
 
   // Live verified resolution & play method from actual decoded <video> frames + Jellyfin MediaSource
   const syncDecodedVideoSize = () => {
@@ -1948,10 +1951,10 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
     : !playback
     ? null
     : playback.playMethod === 'DirectPlay' || !playback.isHls
-    ? 'Direct Play'
+    ? t.directPlay
     : playback.playMethod === 'DirectStream'
-    ? 'Direct Remux'
-    : 'Transcoded';
+    ? t.directRemux
+    : t.transcoded;
   const isLosslessVideo = Boolean(
     playback &&
       (!playback.isHls ||
@@ -1967,7 +1970,7 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
       : '';
     const base =
       quality === 'auto'
-        ? `Original${resSuffix}`
+        ? `${t.originalQuality}${resSuffix}`
         : activeQualityLabel.replace(' HD', '').replace(' SD', '');
     return autoStability ? `Auto · ${base}` : base;
   })();
@@ -1985,21 +1988,41 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
     );
     return isLowerResolution || isLowerBitrate;
   }).map((opt) => {
-    if (opt.id !== 'auto' || !playback) return opt;
+    if (opt.id !== 'auto') {
+      if (lang === 'ro') {
+        const roDesc =
+          opt.id === '1080p'
+            ? '8 Mbps · Înaltă definiție'
+            : opt.id === '720p'
+            ? '4 Mbps · Ideal pe Wi-Fi și mobil'
+            : opt.id === '480p'
+            ? '1,5 Mbps · Consum redus de date'
+            : '0,7 Mbps · Conexiuni foarte lente';
+        return { ...opt, description: roDesc };
+      }
+      return opt;
+    }
+    if (!playback) {
+      return {
+        ...opt,
+        label: t.originalQuality,
+        description: t.originalUntouchedDesc,
+      };
+    }
     const specParts: string[] = [];
     if (sourceResBadge) specParts.push(sourceResBadge);
     if (playback.videoCodec) specParts.push(playback.videoCodec);
     if (sourceMbpsLabel) specParts.push(sourceMbpsLabel);
     specParts.push(
       !playback.isHls || playback.playMethod === 'DirectPlay'
-        ? 'Direct Play'
+        ? t.directPlay
         : playback.playMethod === 'DirectStream' || quality !== 'auto'
-        ? 'Lossless Video Remux'
-        : 'Source Quality'
+        ? t.losslessVideoRemux
+        : t.originalQuality
     );
     return {
       ...opt,
-      label: sourceResBadge ? `Original (${sourceResBadge})` : 'Original',
+      label: sourceResBadge ? `${t.originalQuality} (${sourceResBadge})` : t.originalQuality,
       description: specParts.join(' · '),
     };
   });
@@ -2060,7 +2083,7 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
   })();
 
   const activeAspectLabel =
-    ASPECT_RATIO_OPTIONS.find((a) => a.id === aspectRatio)?.label || 'Auto';
+    aspectRatioOptions.find((a) => a.id === aspectRatio)?.label || t.aspectAuto;
 
   const videoAspectClass =
     aspectRatio === 'cover'
@@ -2166,7 +2189,7 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
           <div className="mb-2 flex items-center justify-between border-b border-white/10 pb-1.5">
             <span className="flex items-center gap-1.5 font-bold uppercase tracking-wider text-violet-300">
               <Info className="h-3.5 w-3.5" />
-              Playback Info
+              {t.playbackInfo}
             </span>
             <button
               onClick={() => setShowPlaybackInfo(false)}
@@ -2177,30 +2200,30 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
           </div>
           <div className="space-y-1 font-mono text-[11px]">
             <div className="flex justify-between gap-2">
-              <span className="text-zinc-400">Play Method</span>
+              <span className="text-zinc-400">{t.playMethod}</span>
               <span className={`font-semibold ${isLosslessVideo ? 'text-emerald-300' : 'text-amber-300'}`}>
                 {offlineQualityLabel
                   ? 'Offline OPFS'
                   : !playback?.isHls || playback?.playMethod === 'DirectPlay'
-                  ? 'Direct Play (Original)'
+                  ? `${t.directPlay} (${t.originalQuality})`
                   : playback?.playMethod === 'DirectStream'
-                  ? 'Direct Remux (Lossless Video)'
+                  ? `${t.directRemux} (${t.losslessVideoRemux})`
                   : useNativeHls
-                  ? 'Native HLS (Transcode)'
-                  : 'HLS Transcode'}
+                  ? `Native HLS (${t.transcoded})`
+                  : `HLS ${t.transcoded}`}
               </span>
             </div>
             <div className="flex justify-between gap-2">
-              <span className="text-zinc-400">Decoded Output</span>
+              <span className="text-zinc-400">{t.decodedOutput}</span>
               <span>
                 {decodedSize
                   ? `${decodedSize.width}×${decodedSize.height}${verifiedResBadge ? ` (${verifiedResBadge})` : ''}`
-                  : 'Verifying frame...'}
+                  : t.verifyingFrame}
               </span>
             </div>
             {playback?.sourceWidth && playback?.sourceHeight && (
               <div className="flex justify-between gap-2">
-                <span className="text-zinc-400">Source File</span>
+                <span className="text-zinc-400">{t.sourceFile}</span>
                 <span>
                   {playback.sourceWidth}×{playback.sourceHeight}
                   {sourceResBadge ? ` (${sourceResBadge})` : ''}
@@ -2209,7 +2232,7 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
             )}
             {playback?.videoCodec && (
               <div className="flex justify-between gap-2">
-                <span className="text-zinc-400">Video</span>
+                <span className="text-zinc-400">{t.videoLabel}</span>
                 <span>
                   {playback.videoCodec}
                   {playback.videoRange ? ` · ${playback.videoRange}` : ''}
@@ -2219,7 +2242,7 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
             )}
             {playback?.audioCodec && (
               <div className="flex justify-between gap-2">
-                <span className="text-zinc-400">Audio</span>
+                <span className="text-zinc-400">{t.audioLabel}</span>
                 <span>
                   {playback.audioCodec}
                   {playback.audioChannels
@@ -2236,25 +2259,25 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
             )}
             {playback?.sourceBitrate && (
               <div className="flex justify-between gap-2">
-                <span className="text-zinc-400">Source Bitrate</span>
+                <span className="text-zinc-400">{t.sourceBitrate}</span>
                 <span>{(playback.sourceBitrate / 1_000_000).toFixed(1)} Mbps</span>
               </div>
             )}
             <div className="flex justify-between gap-2">
-              <span className="text-zinc-400">Network / Buffer</span>
+              <span className="text-zinc-400">{t.networkBuffer}</span>
               <span>
                 {networkLabel} · {bufferAheadSec}s
               </span>
             </div>
             <div className="flex justify-between gap-2">
-              <span className="text-zinc-400">Speed / Aspect</span>
+              <span className="text-zinc-400">{t.speedAspect}</span>
               <span>
                 {playbackSpeed}x · {activeAspectLabel}
               </span>
             </div>
             {videoPlaybackQuality && (
               <div className="flex justify-between gap-2">
-                <span className="text-zinc-400">Dropped Frames</span>
+                <span className="text-zinc-400">{t.droppedFrames}</span>
                 <span>
                   {videoPlaybackQuality.droppedVideoFrames} / {videoPlaybackQuality.totalVideoFrames}
                 </span>
@@ -2301,7 +2324,7 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
           >
             {loadingSubtitles && activeLines.length === 0 ? (
               <span className="rounded-lg bg-black/70 px-3 py-1 text-xs font-medium text-zinc-200 backdrop-blur-sm">
-                Loading subtitles...
+                {t.loadingSubtitles}
               </span>
             ) : (
               activeLines.map((line, idx) => (
@@ -2329,7 +2352,7 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
               e.stopPropagation();
               seekBy(-10);
             }}
-            aria-label="Back 10 seconds"
+            aria-label="-10s"
             className="pointer-events-auto flex h-12 w-12 items-center justify-center rounded-full bg-black/45 text-white backdrop-blur-md transition hover:scale-110 hover:bg-black/65 active:scale-95 sm:h-14 sm:w-14"
           >
             <RotateCcw className="h-6 w-6" />
@@ -2342,7 +2365,7 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
               e.stopPropagation();
               togglePlay();
             }}
-            aria-label={playing ? 'Pause' : 'Play'}
+            aria-label={playing ? t.pause : t.play}
             className="pointer-events-auto flex h-16 w-16 items-center justify-center rounded-full bg-white/95 text-obsidian shadow-2xl transition hover:scale-105 active:scale-95 sm:h-20 sm:w-20"
           >
             {playing ? (
@@ -2357,7 +2380,7 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
               e.stopPropagation();
               seekBy(10);
             }}
-            aria-label="Forward 10 seconds"
+            aria-label="+10s"
             className="pointer-events-auto flex h-12 w-12 items-center justify-center rounded-full bg-black/45 text-white backdrop-blur-md transition hover:scale-110 hover:bg-black/65 active:scale-95 sm:h-14 sm:w-14"
           >
             <RotateCw className="h-6 w-6" />
@@ -2383,7 +2406,7 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
           <div
             ref={brightnessTrackRef}
             role="slider"
-            aria-label="Brightness"
+            aria-label={t.brightness}
             aria-valuemin={Math.round(MIN_BRIGHTNESS * 100)}
             aria-valuemax={Math.round(MAX_BRIGHTNESS * 100)}
             aria-valuenow={brightnessPct}
@@ -2422,7 +2445,7 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
       {showBrightnessHud && (
         <div className="pointer-events-none absolute top-20 left-1/2 z-30 flex -translate-x-1/2 items-center gap-2 rounded-full border border-white/15 bg-black/75 px-4 py-2 text-xs font-bold text-white shadow-xl backdrop-blur-md">
           <Sun className="h-4 w-4 text-amber-300" />
-          <span>Brightness {brightnessPct}%</span>
+          <span>{t.brightness} {brightnessPct}%</span>
         </div>
       )}
 
@@ -2438,7 +2461,11 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
         <div className="pointer-events-none absolute inset-0 z-10 flex flex-col items-center justify-center bg-black/40 px-6 text-center">
           <div className="h-12 w-12 animate-spin rounded-full border-4 border-violet-500 border-t-transparent" />
           <p className="mt-4 text-xs sm:text-sm font-medium text-zinc-200 drop-shadow">
-            {loading ? `Loading ${activeQualityLabel} stream...` : 'Buffering...'}
+            {loading
+              ? lang === 'ro'
+                ? `Se încarcă fluxul ${activeQualityLabel}...`
+                : `Loading ${activeQualityLabel} stream...`
+              : t.buffering}
           </p>
           {streamStatus && (
             <p className="mt-1 max-w-xs text-[11px] text-zinc-400 drop-shadow">
@@ -2455,7 +2482,7 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
                 className="flex items-center gap-1.5 rounded-xl bg-white/95 px-3.5 py-2 text-xs font-bold text-obsidian shadow-lg hover:bg-white"
               >
                 <RefreshCw className="h-3.5 w-3.5" />
-                Reconnect
+                {t.reconnect}
               </button>
               {playback?.isHls &&
                 !useNativeHls &&
@@ -2467,12 +2494,16 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
                     onClick={(e) => {
                       e.stopPropagation();
                       resumeOverrideRef.current = getResumePositionForReload();
-                      setStreamStatus('Switching to native Android player...');
+                      setStreamStatus(
+                        lang === 'ro'
+                          ? 'Se trece la playerul nativ...'
+                          : 'Switching to native Android player...'
+                      );
                       setUseNativeHls(true);
                     }}
                     className="rounded-xl border border-emerald-400/35 bg-emerald-500/20 px-3.5 py-2 text-xs font-bold text-emerald-100 shadow-lg backdrop-blur-md hover:bg-emerald-500/30"
                   >
-                    Native Player
+                    {t.nativePlayer}
                   </button>
                 )}
               {quality !== 'auto' && (
@@ -2483,7 +2514,7 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
                   }}
                   className="rounded-xl border border-white/20 bg-white/15 px-3.5 py-2 text-xs font-bold text-white shadow-lg backdrop-blur-md hover:bg-white/25"
                 >
-                  Try Original
+                  {t.tryOriginal}
                 </button>
               )}
               {quality !== '720p' && quality !== '480p' && quality !== '360p' && (
@@ -2494,7 +2525,7 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
                   }}
                   className="rounded-xl bg-violet-600 px-3.5 py-2 text-xs font-bold text-white shadow-lg hover:bg-violet-500"
                 >
-                  Switch to 720p
+                  {lang === 'ro' ? 'Treci la 720p' : 'Switch to 720p'}
                 </button>
               )}
               {quality === '720p' && (
@@ -2505,7 +2536,7 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
                   }}
                   className="rounded-xl bg-violet-600 px-3.5 py-2 text-xs font-bold text-white shadow-lg hover:bg-violet-500"
                 >
-                  Switch to 480p
+                  {lang === 'ro' ? 'Treci la 480p' : 'Switch to 480p'}
                 </button>
               )}
               {quality === '480p' && (
@@ -2516,7 +2547,7 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
                   }}
                   className="rounded-xl bg-violet-600 px-3.5 py-2 text-xs font-bold text-white shadow-lg hover:bg-violet-500"
                 >
-                  Switch to 360p
+                  {lang === 'ro' ? 'Treci la 360p' : 'Switch to 360p'}
                 </button>
               )}
             </div>
@@ -2534,14 +2565,14 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
               className="flex items-center gap-2 rounded-xl bg-white px-5 py-2.5 text-sm font-bold text-obsidian hover:bg-zinc-200 focus:outline-none focus:ring-4 focus:ring-violet-400"
             >
               <RefreshCw className="h-4 w-4" />
-              Retry
+              {t.retry}
             </button>
             {quality !== 'auto' && (
               <button
                 onClick={() => handleQualityChange('auto')}
                 className="rounded-xl bg-violet-600 px-5 py-2.5 text-sm font-bold text-white hover:bg-violet-500 focus:outline-none focus:ring-4 focus:ring-violet-400"
               >
-                Try Original
+                {t.tryOriginal}
               </button>
             )}
             {quality !== '720p' ? (
@@ -2549,21 +2580,21 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
                 onClick={() => handleQualityChange('720p')}
                 className="rounded-xl bg-violet-600 px-5 py-2.5 text-sm font-bold text-white hover:bg-violet-500 focus:outline-none focus:ring-4 focus:ring-violet-400"
               >
-                Try 720p
+                {lang === 'ro' ? 'Încearcă 720p' : 'Try 720p'}
               </button>
             ) : (
               <button
                 onClick={() => handleQualityChange('480p')}
                 className="rounded-xl border border-white/20 bg-white/10 px-5 py-2.5 text-sm font-bold text-white hover:bg-white/20 focus:outline-none focus:ring-4 focus:ring-violet-400"
               >
-                Try 480p
+                {lang === 'ro' ? 'Încearcă 480p' : 'Try 480p'}
               </button>
             )}
             <button
               onClick={onClose}
               className="rounded-xl border border-white/20 bg-white/10 px-5 py-2.5 text-sm font-semibold text-white hover:bg-white/20 focus:outline-none focus:ring-4 focus:ring-violet-400"
             >
-              Back to Browse
+              {t.backToBrowse}
             </button>
           </div>
         </div>
@@ -2583,17 +2614,17 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
             <Cast className="h-4 w-4 sm:h-5 sm:w-5" />
             <span className="text-xs font-bold uppercase tracking-wider">
               {castState.isBuffering
-                ? `Buffering on ${castDeviceName}...`
+                ? `Buffering · ${castDeviceName}`
                 : castState.isPaused
-                ? `Paused on ${castDeviceName}`
-                : `Casting to ${castDeviceName}`}
+                ? `${t.pause} · ${castDeviceName}`
+                : `Cast · ${castDeviceName}`}
             </span>
           </div>
           <h3 className="mt-2 text-xl sm:text-2xl font-black text-white">{item.name}</h3>
           <div className="mt-5 flex flex-wrap items-center justify-center gap-3">
             <button
               onClick={() => seekBy(-10)}
-              aria-label="Back 10 seconds on TV"
+              aria-label="-10s"
               className="flex h-11 w-11 items-center justify-center rounded-full border border-white/20 bg-white/10 text-white hover:bg-white/20"
             >
               <RotateCcw className="h-5 w-5" />
@@ -2605,18 +2636,18 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
               {displayPlaying ? (
                 <>
                   <Pause className="h-4 w-4 fill-obsidian" />
-                  Pause on TV
+                  {t.pauseOnTv}
                 </>
               ) : (
                 <>
                   <Play className="h-4 w-4 fill-obsidian" />
-                  Play on TV
+                  {t.playOnTv}
                 </>
               )}
             </button>
             <button
               onClick={() => seekBy(10)}
-              aria-label="Forward 10 seconds on TV"
+              aria-label="+10s"
               className="flex h-11 w-11 items-center justify-center rounded-full border border-white/20 bg-white/10 text-white hover:bg-white/20"
             >
               <RotateCw className="h-5 w-5" />
@@ -2626,7 +2657,7 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
             onClick={handleCastClick}
             className="mt-4 rounded-xl border border-white/20 bg-white/10 px-5 py-2 text-xs font-semibold text-zinc-200 hover:bg-white/20"
           >
-            Stop Casting
+            {t.stopCasting}
           </button>
         </div>
       )}
@@ -2643,14 +2674,14 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
         <div className="absolute bottom-24 right-3 sm:bottom-28 sm:right-6 z-30 w-[min(92vw,20rem)] overflow-hidden rounded-2xl border border-white/15 bg-surface/95 p-4 shadow-2xl backdrop-blur-xl animate-fade-in">
           <div className="flex items-start justify-between gap-2">
             <span className="text-xs font-bold uppercase tracking-wider text-violet-400">
-              Up Next in {nextCountdown}s
+              {t.upNextIn} {nextCountdown}s
             </span>
             <button
               onClick={() => {
                 setNextDismissed(true);
                 setNextCountdown(null);
               }}
-              aria-label="Cancel auto-play"
+              aria-label={t.cancel}
               className="rounded-lg p-1 text-zinc-400 hover:bg-white/10 hover:text-white"
             >
               <X className="h-4 w-4" />
@@ -2666,7 +2697,7 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
               className="flex flex-1 items-center justify-center gap-2 rounded-xl bg-white py-2 text-xs font-bold text-obsidian transition hover:bg-zinc-200 focus:outline-none focus:ring-4 focus:ring-violet-400"
             >
               <Play className="h-3.5 w-3.5 fill-obsidian" />
-              Play Now
+              {t.playNow}
             </button>
             <button
               onClick={() => {
@@ -2675,7 +2706,7 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
               }}
               className="rounded-xl border border-white/15 bg-white/5 px-3 py-2 text-xs font-semibold text-zinc-200 hover:bg-white/10"
             >
-              Cancel
+              {t.cancel}
             </button>
           </div>
         </div>
@@ -2701,7 +2732,7 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
           }
         >
           <ArrowLeft className={isTv ? 'h-5 w-5' : 'h-4 w-4'} />
-          <span>Back</span>
+          <span>{t.back}</span>
         </button>
 
         <div className="min-w-0 text-right">
@@ -2943,7 +2974,7 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
               <button
                 data-tv-pill={isTv ? 'true' : undefined}
                 onClick={() => onPlayNext(nextEpisode)}
-                title={`Next: ${nextEpisode.name}`}
+                title={`${t.nextEpisode}: ${nextEpisode.name}`}
                 className={
                   isTv
                     ? 'flex items-center gap-2 rounded-full border border-white/25 bg-[#141828]/95 px-5 py-3 text-sm font-bold text-white shadow-xl'
@@ -2951,7 +2982,7 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
                 }
               >
                 <SkipForward className={isTv ? 'h-5 w-5' : 'h-4 w-4'} />
-                <span className={isTv ? 'inline' : 'hidden sm:inline'}>Next Episode</span>
+                <span className={isTv ? 'inline' : 'hidden sm:inline'}>{t.nextEpisode}</span>
               </button>
             )}
 
@@ -3021,7 +3052,7 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
             {/* Live Finish-Time Indicator ("Ends at 6:16 PM") */}
             {endsAtLabel && (
               <span className="hidden lg:inline-flex items-center gap-1.5 pl-2 text-xs font-medium text-zinc-300 tabular-nums">
-                Ends at {endsAtLabel}
+                {t.endsAt} {endsAtLabel}
                 {repeatMode === 'one' && (
                   <Repeat className="h-3.5 w-3.5 text-violet-400" />
                 )}
@@ -3041,7 +3072,7 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
                     setShowSubMenu(false);
                     bumpControls();
                   }}
-                  title="Chapters"
+                  title={t.chapters}
                   className={
                     isTv
                       ? 'flex items-center gap-2 rounded-full border border-white/20 bg-[#141828]/95 px-5 py-3 text-sm font-bold text-white shadow-xl'
@@ -3051,7 +3082,7 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
                   }
                 >
                   <ListVideo className={isTv ? 'h-5 w-5' : 'h-4 w-4 sm:h-5 sm:w-5'} />
-                  {isTv && <span>Chapters</span>}
+                  {isTv && <span>{t.chapters}</span>}
                 </button>
                 {showChaptersMenu && (
                   <div
@@ -3062,7 +3093,7 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
                   >
                     <div className="mb-2 flex items-center justify-between px-1">
                       <span className="text-[11px] font-bold uppercase tracking-wider text-zinc-300">
-                        Chapters ({chapters.length})
+                        {t.chapters} ({chapters.length})
                       </span>
                       <button
                         onClick={() => setShowChaptersMenu(false)}
@@ -3140,7 +3171,7 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
                   onToggleFavorite(item);
                   bumpControls();
                 }}
-                title={item.isFavorite ? 'Remove from Favorites' : 'Add to Favorites'}
+                title={item.isFavorite ? t.removeFromMyList : t.addToMyList}
                 className={
                   isTv
                     ? `rounded-full border border-white/20 bg-[#141828]/95 p-3 shadow-xl ${
@@ -3176,7 +3207,7 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
                   }
                   bumpControls();
                 }}
-                title="Stream Quality"
+                title={t.streamQuality}
                 className="flex items-center gap-2 rounded-full border border-white/25 bg-[#141828]/95 px-5 py-3 text-sm font-bold text-white shadow-xl"
               >
                 <span
@@ -3205,7 +3236,7 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
                   }
                   bumpControls();
                 }}
-                title="Playback Settings"
+                title={t.playbackSettings}
                 className={
                   isTv
                     ? 'flex items-center gap-2 rounded-full border border-white/20 bg-[#141828]/95 px-5 py-3 text-sm font-bold text-white shadow-xl'
@@ -3223,7 +3254,7 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
                   <>
                     <Settings className={isTv ? 'h-5 w-5' : 'h-4 w-4 text-violet-300'} />
                     <span className="max-w-[112px] truncate sm:max-w-none">
-                      {isTv ? 'Settings' : verifiedQualityPillLabel}
+                      {isTv ? t.settings : verifiedQualityPillLabel}
                     </span>
                   </>
                 )}
@@ -3239,10 +3270,10 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
                     <>
                       <div className="flex items-center justify-between px-3 py-1.5">
                         <span className="text-[11px] font-bold uppercase tracking-wider text-zinc-300">
-                          Playback Settings
+                          {t.playbackSettings}
                         </span>
                         {isTv ? (
-                          <span className="text-[10px] font-medium text-zinc-400">↩ Back to close</span>
+                          <span className="text-[10px] font-medium text-zinc-400">{t.backToClose}</span>
                         ) : (
                           <button
                             onClick={() => setShowQualityMenu(false)}
@@ -3258,7 +3289,7 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
                           onClick={() => setSettingsPanel('quality')}
                           className="flex w-full items-center justify-between rounded-xl px-3 py-2.5 text-xs text-white transition hover:bg-white/10"
                         >
-                          <span className="font-semibold">Stream Quality</span>
+                          <span className="font-semibold">{t.streamQuality}</span>
                           <span className="flex items-center gap-1 text-zinc-300">
                             {verifiedQualityPillLabel}
                             <ChevronRight className="h-3.5 w-3.5" />
@@ -3269,7 +3300,7 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
                           onClick={() => setSettingsPanel('aspect')}
                           className="flex w-full items-center justify-between rounded-xl px-3 py-2.5 text-xs text-white transition hover:bg-white/10"
                         >
-                          <span className="font-semibold">Aspect Ratio</span>
+                          <span className="font-semibold">{t.aspectRatio}</span>
                           <span className="flex items-center gap-1 text-zinc-400">
                             {activeAspectLabel}
                             <ChevronRight className="h-3.5 w-3.5" />
@@ -3280,7 +3311,7 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
                           onClick={() => setSettingsPanel('speed')}
                           className="flex w-full items-center justify-between rounded-xl px-3 py-2.5 text-xs text-white transition hover:bg-white/10"
                         >
-                          <span className="font-semibold">Playback Speed</span>
+                          <span className="font-semibold">{t.playbackSpeed}</span>
                           <span className="flex items-center gap-1 text-zinc-400">
                             {playbackSpeed}x
                             <ChevronRight className="h-3.5 w-3.5" />
@@ -3291,9 +3322,9 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
                           onClick={() => setSettingsPanel('repeat')}
                           className="flex w-full items-center justify-between rounded-xl px-3 py-2.5 text-xs text-white transition hover:bg-white/10"
                         >
-                          <span className="font-semibold">Repeat Mode</span>
+                          <span className="font-semibold">{t.repeatMode}</span>
                           <span className="flex items-center gap-1 text-zinc-400">
-                            {repeatMode === 'one' ? 'Repeat One' : 'None'}
+                            {repeatMode === 'one' ? t.repeatOne : t.repeatNone}
                             <ChevronRight className="h-3.5 w-3.5" />
                           </span>
                         </button>
@@ -3309,10 +3340,10 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
                         >
                           <span className="flex items-center gap-2 font-semibold">
                             <Info className="h-3.5 w-3.5 text-violet-300" />
-                            Playback Info
+                            {t.playbackInfo}
                           </span>
                           <span className={showPlaybackInfo ? 'font-bold text-violet-300' : 'text-zinc-400'}>
-                            {showPlaybackInfo ? 'On' : 'Off'}
+                            {showPlaybackInfo ? t.on : t.off}
                           </span>
                         </button>
                       </div>
@@ -3326,9 +3357,9 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
                         className="mb-1 flex w-full items-center gap-1.5 rounded-lg px-2 py-1.5 text-[11px] font-bold uppercase tracking-wider text-zinc-300 hover:bg-white/10"
                       >
                         <ChevronLeft className="h-3.5 w-3.5" />
-                        Aspect Ratio
+                        {t.aspectRatio}
                       </button>
-                      {ASPECT_RATIO_OPTIONS.map((opt) => {
+                      {aspectRatioOptions.map((opt) => {
                         const selected = aspectRatio === opt.id;
                         return (
                           <button
@@ -3359,7 +3390,7 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
                         className="mb-1 flex w-full items-center gap-1.5 rounded-lg px-2 py-1.5 text-[11px] font-bold uppercase tracking-wider text-zinc-300 hover:bg-white/10"
                       >
                         <ChevronLeft className="h-3.5 w-3.5" />
-                        Playback Speed
+                        {t.playbackSpeed}
                       </button>
                       {PLAYBACK_SPEEDS.map((spd) => {
                         const selected = playbackSpeed === spd;
@@ -3374,7 +3405,7 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
                               selected ? 'bg-violet-600 text-white' : 'text-zinc-200 hover:bg-white/10'
                             }`}
                           >
-                            <span>{spd === 1 ? '1x (Normal)' : `${spd}x`}</span>
+                            <span>{spd === 1 ? t.normalSpeed : `${spd}x`}</span>
                             {selected && <Check className="h-4 w-4 flex-shrink-0" />}
                           </button>
                         );
@@ -3389,12 +3420,12 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
                         className="mb-1 flex w-full items-center gap-1.5 rounded-lg px-2 py-1.5 text-[11px] font-bold uppercase tracking-wider text-zinc-300 hover:bg-white/10"
                       >
                         <ChevronLeft className="h-3.5 w-3.5" />
-                        Repeat Mode
+                        {t.repeatMode}
                       </button>
                       {(
                         [
-                          { id: 'none', label: 'None', desc: 'Stop or play next episode at end' },
-                          { id: 'one', label: 'Repeat One', desc: 'Loop this video continuously' },
+                          { id: 'none', label: t.repeatNone, desc: t.repeatNoneDesc },
+                          { id: 'one', label: t.repeatOne, desc: t.repeatOneDesc },
                         ] as const
                       ).map((opt) => {
                         const selected = repeatMode === opt.id;
@@ -3425,9 +3456,9 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
                       {openedQualityDirectlyRef.current ? (
                         <div className="mb-1.5 flex items-center justify-between px-2 py-1">
                           <span className="text-[11px] font-bold uppercase tracking-wider text-zinc-300">
-                            Stream Quality
+                            {t.streamQuality}
                           </span>
-                          <span className="text-[10px] font-medium text-zinc-400">↩ Back to close</span>
+                          <span className="text-[10px] font-medium text-zinc-400">{t.backToClose}</span>
                         </div>
                       ) : (
                         <button
@@ -3435,7 +3466,7 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
                           className="mb-1 flex w-full items-center gap-1.5 rounded-lg px-2 py-1.5 text-[11px] font-bold uppercase tracking-wider text-zinc-300 hover:bg-white/10"
                         >
                           <ChevronLeft className="h-3.5 w-3.5" />
-                          Stream Quality
+                          {t.streamQuality}
                         </button>
                       )}
 
@@ -3455,17 +3486,17 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
                             {networkLabel}
                           </span>
                           <span className="font-mono text-[10px] text-zinc-400">
-                            {bufferAheadSec > 0 ? `${bufferAheadSec}s buffer` : loading ? 'Loading...' : 'Live'}
+                            {bufferAheadSec > 0 ? `${bufferAheadSec}s buffer` : loading ? t.buffering : 'Live'}
                           </span>
                         </div>
                         {playback && (
                           <div className="flex items-center justify-between gap-2 text-[10px] text-zinc-400">
                             <span className="truncate">
                               {decodedSize
-                                ? `Active: ${decodedSize.width}×${decodedSize.height}`
+                                ? `${t.decodedOutput}: ${decodedSize.width}×${decodedSize.height}`
                                 : playback.sourceWidth && playback.sourceHeight
-                                ? `Source: ${playback.sourceWidth}×${playback.sourceHeight}`
-                                : 'Verifying resolution...'}
+                                ? `${t.sourceFile}: ${playback.sourceWidth}×${playback.sourceHeight}`
+                                : t.verifyingFrame}
                               {sourceMbpsLabel ? ` · ${sourceMbpsLabel}` : ''}
                             </span>
                             {playMethodLabel && (
@@ -3493,9 +3524,9 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
                             }`}
                           >
                             <div className="min-w-0">
-                              <div className="text-xs font-bold">Auto (Stability First)</div>
+                              <div className="text-xs font-bold">{t.autoStabilityTitle}</div>
                               <div className="text-[11px] opacity-85">
-                                Auto-adjusts quality if connection buffers ({activeQualityLabel})
+                                {t.autoStabilityDesc} ({activeQualityLabel})
                               </div>
                             </div>
                             {autoStability && <Check className="h-4 w-4 flex-shrink-0" />}
@@ -3541,9 +3572,9 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
                             }`}
                           >
                             <div className="min-w-0">
-                              <div className="text-xs font-bold">Auto (Hotspot / Weak Wi-Fi)</div>
+                              <div className="text-xs font-bold">{t.autoTvHotspotTitle}</div>
                               <div className="text-[11px] opacity-85">
-                                Automatically lowers resolution only if playback stalls
+                                {t.autoTvHotspotDesc}
                               </div>
                             </div>
                             {autoStability && <Check className="h-4 w-4 flex-shrink-0" />}
@@ -3567,7 +3598,7 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
                     setShowQualityMenu(false);
                     bumpControls();
                   }}
-                  title="Audio & Subtitles"
+                  title={t.audioAndSubtitles}
                   className={
                     isTv
                       ? 'flex items-center gap-2 rounded-full border border-white/20 bg-[#141828]/95 px-5 py-3 text-sm font-bold text-white shadow-xl'
@@ -3577,7 +3608,7 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
                   }
                 >
                   <Subtitles className={isTv ? 'h-5 w-5' : 'h-4 w-4 sm:h-5 sm:w-5'} />
-                  {isTv && <span>Audio &amp; Subtitles</span>}
+                  {isTv && <span>{t.audioAndSubtitles}</span>}
                 </button>
                 {showSubMenu && (
                   <div
@@ -3592,7 +3623,7 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
                   >
                     {/* Mobile sheet header */}
                     <div className="flex items-center justify-between border-b border-white/10 pb-2 sm:hidden">
-                      <span className="text-xs font-bold text-white">Audio & Subtitles</span>
+                      <span className="text-xs font-bold text-white">{t.audioAndSubtitles}</span>
                       <button
                         onClick={() => setShowSubMenu(false)}
                         className="rounded-lg p-1 text-zinc-400 hover:bg-white/10 hover:text-white"
@@ -3605,7 +3636,7 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
                     {playback.audioTracks.length > 0 && (
                       <div className="flex flex-col min-w-0">
                         <div className="px-2.5 py-1.5 text-[11px] font-bold uppercase tracking-wider text-zinc-400">
-                          Audio
+                          {t.audioLabel}
                         </div>
                         <div className="max-h-44 sm:max-h-60 space-y-0.5 overflow-y-auto pr-0.5">
                           {playback.audioTracks.map((track) => {
@@ -3620,7 +3651,9 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
                                     : 'text-zinc-200 hover:bg-white/10'
                                 }`}
                               >
-                                <span className="truncate">{track.label}</span>
+                                <span className="truncate">
+                                  {localizeTrackLabel(track.label, track.language, lang)}
+                                </span>
                                 {isSelected && <Check className="h-3.5 w-3.5 flex-shrink-0" />}
                               </button>
                             );
@@ -3633,7 +3666,7 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
                     {playback.subtitles.length > 0 && (
                       <div className="flex flex-col min-w-0">
                         <div className="px-2.5 py-1.5 text-[11px] font-bold uppercase tracking-wider text-zinc-400">
-                          Subtitles
+                          {t.subtitlesLabel}
                         </div>
                         <div className="max-h-48 sm:max-h-60 space-y-0.5 overflow-y-auto pr-0.5">
                           <button
@@ -3644,7 +3677,7 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
                                 : 'text-zinc-300 hover:bg-white/10'
                             }`}
                           >
-                            <span>Off</span>
+                            <span>{t.off}</span>
                             {activeSubtitleIndex === null && (
                               <Check className="h-3.5 w-3.5 flex-shrink-0" />
                             )}
@@ -3661,7 +3694,9 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
                                     : 'text-zinc-200 hover:bg-white/10'
                                 }`}
                               >
-                                <span className="truncate">{sub.label}</span>
+                                <span className="truncate">
+                                  {localizeTrackLabel(sub.label, sub.language, lang)}
+                                </span>
                                 <span className="flex flex-shrink-0 items-center gap-1.5">
                                   {!sub.isText && (
                                     <span
@@ -3688,7 +3723,7 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
                       <div className="col-span-full mt-1 border-t border-white/10 pt-2.5 flex flex-wrap items-center justify-between gap-2 text-[11px]">
                         <div className="flex items-center gap-1">
                           <span className="mr-1 font-bold uppercase tracking-wider text-zinc-400">
-                            Size
+                            {t.sizeLabel}
                           </span>
                           {(
                             [
@@ -3714,13 +3749,13 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
 
                         <div className="flex items-center gap-1">
                           <span className="mr-1 font-bold uppercase tracking-wider text-zinc-400">
-                            Style
+                            {t.styleLabel}
                           </span>
                           {(
                             [
-                              { id: 'pill', label: 'Pill' },
-                              { id: 'outline', label: 'Shadow' },
-                              { id: 'box', label: 'Box' },
+                              { id: 'pill', label: t.stylePill },
+                              { id: 'outline', label: t.styleOutline },
+                              { id: 'box', label: t.styleBox },
                             ] as Array<{ id: SubtitleStyle; label: string }>
                           ).map((st) => (
                             <button
@@ -3740,7 +3775,7 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
                         {activeTextSubIndex !== null && (
                           <div className="flex items-center gap-1">
                             <span className="mr-1 font-bold uppercase tracking-wider text-zinc-400">
-                              Sync
+                              {t.syncLabel}
                             </span>
                             <button
                               onClick={() =>

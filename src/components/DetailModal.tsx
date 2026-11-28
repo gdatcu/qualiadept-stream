@@ -40,6 +40,13 @@ import {
   subscribeOfflineDownloads,
   supportsInAppOfflineStorage,
 } from '../services/offlineDownloads';
+import {
+  formatOverviewText,
+  formatSeasonLabel,
+  localizeTrackLabel,
+  translateGenre,
+  useI18n,
+} from '../i18n';
 import type {
   AuthSession,
   MediaItem,
@@ -119,6 +126,7 @@ export const DetailModal: React.FC<DetailModalProps> = ({
   onTogglePlayed,
 }) => {
   const isTv = isTizenTv();
+  const { lang, t } = useI18n();
   const playBtnRef = useRef<HTMLButtonElement>(null);
   const scrollContainerRef = useRef<HTMLDivElement>(null);
   const chaptersRowRef = useRef<HTMLDivElement>(null);
@@ -364,11 +372,15 @@ export const DetailModal: React.FC<DetailModalProps> = ({
   const firstEpisode = episodes[0] || null;
   const seriesPlayLabel = firstEpisode?.resumePositionSeconds
     ? firstEpisode.episodeNumber != null
-      ? `Resume Episode ${firstEpisode.episodeNumber}`
-      : 'Resume'
+      ? lang === 'ro'
+        ? `Continuă episodul ${firstEpisode.episodeNumber}`
+        : `Resume Episode ${firstEpisode.episodeNumber}`
+      : t.resume
     : firstEpisode?.episodeNumber != null
-    ? `Play Episode ${firstEpisode.episodeNumber}`
-    : 'Play';
+    ? lang === 'ro'
+      ? `Redă episodul ${firstEpisode.episodeNumber}`
+      : `Play Episode ${firstEpisode.episodeNumber}`
+    : t.play;
 
   const runtimeLabel = formatRuntimeHours(item.runtimeMinutes);
   const endsAtLabel = formatEndsAt(item.runtimeMinutes, item.resumePositionSeconds);
@@ -410,7 +422,7 @@ export const DetailModal: React.FC<DetailModalProps> = ({
         <button
           data-tv-pill={isTv ? 'true' : undefined}
           onClick={onClose}
-          aria-label="Close"
+          aria-label={t.close}
           className={
             isTv
               ? 'absolute top-5 right-5 z-30 flex h-12 w-12 items-center justify-center rounded-full border border-white/25 bg-[#121626]/95 text-white shadow-xl'
@@ -499,8 +511,8 @@ export const DetailModal: React.FC<DetailModalProps> = ({
                   {item.type === 'Series' && seasons.length > 0 && (
                     <span className="rounded-md border border-white/25 bg-[#15192b] px-2.5 py-0.5 text-xs font-bold text-white">
                       {seasons.length === 1
-                        ? selectedSeason?.name || `Season ${selectedSeason?.seasonNumber ?? 1}`
-                        : `${seasons.length} Seasons`}
+                        ? formatSeasonLabel(selectedSeason?.name, selectedSeason?.seasonNumber, lang)
+                        : `${seasons.length} ${t.seasonsCount}`}
                     </span>
                   )}
                   {runtimeLabel && <span className="text-zinc-200">{runtimeLabel}</span>}
@@ -518,13 +530,13 @@ export const DetailModal: React.FC<DetailModalProps> = ({
                   {endsAtLabel && item.type !== 'Series' && (
                     <span className="inline-flex items-center gap-1.5 rounded-full border border-white/20 bg-[#15192b] px-3 py-0.5 text-xs font-semibold text-zinc-200">
                       <Clock className="h-3.5 w-3.5 text-zinc-300" />
-                      Ends at {endsAtLabel}
+                      {t.endsAt} {endsAtLabel}
                     </span>
                   )}
                   {isPlayed && (
                     <span className="inline-flex items-center gap-1 rounded-full bg-emerald-500/20 border border-emerald-400/35 px-2.5 py-0.5 text-xs font-bold text-emerald-300">
                       <Check className="h-3.5 w-3.5" />
-                      Watched
+                      {t.watched}
                     </span>
                   )}
                 </div>
@@ -549,12 +561,12 @@ export const DetailModal: React.FC<DetailModalProps> = ({
                     <Play className={isTv ? 'h-5 w-5 fill-obsidian' : 'h-4 w-4 fill-obsidian'} />
                     <span>
                       {primaryOfflineRec
-                        ? 'Play Offline'
+                        ? t.playOffline
                         : item.type === 'Series'
                         ? seriesPlayLabel
                         : item.resumePositionSeconds
-                        ? 'Resume'
-                        : 'Play'}
+                        ? t.resume
+                        : t.play}
                     </span>
                   </button>
 
@@ -563,7 +575,7 @@ export const DetailModal: React.FC<DetailModalProps> = ({
                     <button
                       data-tv-pill={isTv ? 'true' : undefined}
                       onClick={() => handlePrimaryPlay(true)}
-                      title="Play from beginning"
+                      title={t.playFromBeginning}
                       className={
                         isTv
                           ? 'flex items-center gap-2 rounded-full border border-white/25 bg-[#15192b] px-6 py-3.5 text-base font-bold text-white shadow-xl'
@@ -571,7 +583,7 @@ export const DetailModal: React.FC<DetailModalProps> = ({
                       }
                     >
                       <RotateCcw className={isTv ? 'h-5 w-5' : 'h-4 w-4'} />
-                      <span className={isTv ? 'inline' : 'hidden sm:inline'}>Restart</span>
+                      <span className={isTv ? 'inline' : 'hidden sm:inline'}>{t.restart}</span>
                     </button>
                   )}
 
@@ -580,7 +592,7 @@ export const DetailModal: React.FC<DetailModalProps> = ({
                     <button
                       data-tv-pill={isTv ? 'true' : undefined}
                       onClick={() => setActiveTrailerUrl(primaryTrailer)}
-                      title={`Watch ${primaryTrailer.name}`}
+                      title={primaryTrailer.name}
                       className={
                         isTv
                           ? 'flex items-center gap-2 rounded-full border border-white/25 bg-[#15192b] px-6 py-3.5 text-base font-bold text-white shadow-xl'
@@ -588,7 +600,7 @@ export const DetailModal: React.FC<DetailModalProps> = ({
                       }
                     >
                       <Film className={isTv ? 'h-5 w-5' : 'h-4 w-4 text-violet-300'} />
-                      <span>Trailer</span>
+                      <span>{t.trailer}</span>
                     </button>
                   )}
 
@@ -597,7 +609,7 @@ export const DetailModal: React.FC<DetailModalProps> = ({
                     <button
                       data-tv-pill={isTv ? 'true' : undefined}
                       onClick={() => onTogglePlayed(item)}
-                      title={isPlayed ? 'Mark as unplayed' : 'Mark as played'}
+                      title={isPlayed ? t.markAsUnplayed : t.markAsPlayed}
                       className={
                         isTv
                           ? `flex items-center gap-2 rounded-full border px-6 py-3.5 text-base font-bold shadow-xl ${
@@ -614,7 +626,7 @@ export const DetailModal: React.FC<DetailModalProps> = ({
                     >
                       <Check className={isTv ? 'h-5 w-5' : 'h-4 w-4'} />
                       <span className={isTv ? 'inline' : 'hidden md:inline'}>
-                        {isPlayed ? 'Played' : 'Mark Played'}
+                        {isPlayed ? t.played : t.markPlayedBtn}
                       </span>
                     </button>
                   )}
@@ -623,7 +635,7 @@ export const DetailModal: React.FC<DetailModalProps> = ({
                   <button
                     data-tv-pill={isTv ? 'true' : undefined}
                     onClick={() => onToggleFavorite(item)}
-                    title={item.isFavorite ? 'Remove from Favorites' : 'Add to Favorites'}
+                    title={item.isFavorite ? t.removeFromMyList : t.addToMyList}
                     className={
                       isTv
                         ? `flex items-center gap-2 rounded-full border px-6 py-3.5 text-base font-bold shadow-xl ${
@@ -644,7 +656,7 @@ export const DetailModal: React.FC<DetailModalProps> = ({
                       }`}
                     />
                     <span className={isTv ? 'inline' : 'hidden sm:inline'}>
-                      {item.isFavorite ? 'In My List' : 'My List'}
+                      {item.isFavorite ? t.inMyList : t.navMyList}
                     </span>
                   </button>
 
@@ -656,12 +668,12 @@ export const DetailModal: React.FC<DetailModalProps> = ({
                           <span className="h-3.5 w-3.5 animate-spin rounded-full border-2 border-violet-300 border-t-transparent" />
                           <span>
                             {primaryActiveDl.status === 'preparing'
-                              ? 'Preparing...'
+                              ? t.preparing
                               : `${primaryActiveDl.percent}% · ${formatBytes(primaryActiveDl.bytesDownloaded)}`}
                           </span>
                           <button
                             onClick={() => cancelOfflineDownload(item.id)}
-                            title="Cancel download"
+                            title={t.cancel}
                             className="ml-1 rounded p-0.5 text-zinc-200 hover:bg-white/15"
                           >
                             <X className="h-3.5 w-3.5" />
@@ -675,7 +687,7 @@ export const DetailModal: React.FC<DetailModalProps> = ({
                           </span>
                           <button
                             onClick={() => deleteOfflineDownload(item.id)}
-                            title="Remove offline copy"
+                            title={t.deleteOfflineCopy}
                             className="rounded-full border border-white/15 bg-white/10 p-2.5 text-zinc-300 transition hover:bg-red-500/20 hover:text-red-300"
                           >
                             <Trash2 className="h-4 w-4" />
@@ -691,7 +703,7 @@ export const DetailModal: React.FC<DetailModalProps> = ({
                           className="flex items-center gap-1.5 rounded-full border border-white/20 bg-white/10 px-4 py-2.5 text-sm font-semibold text-white backdrop-blur-md transition hover:bg-white/20"
                         >
                           <Download className="h-4 w-4 text-violet-300" />
-                          <span className="hidden sm:inline">Download</span>
+                          <span className="hidden sm:inline">{t.download}</span>
                         </button>
                       )}
                     </>
@@ -721,11 +733,9 @@ export const DetailModal: React.FC<DetailModalProps> = ({
                 <div>
                   <h3 className="text-sm font-bold text-white flex items-center gap-2">
                     <Download className="h-4 w-4 text-violet-400" />
-                    Download for Offline · {downloadTarget.name}
+                    {t.downloadForOffline} · {downloadTarget.name}
                   </h3>
-                  <p className="mt-0.5 text-[11px] text-zinc-400">
-                    Pick a compact mobile size (~1–1.5 GB) instead of storing a 10+ GB file.
-                  </p>
+                  <p className="mt-0.5 text-[11px] text-zinc-400">{t.downloadCompactHint}</p>
                 </div>
                 <button
                   onClick={() => setDownloadTarget(null)}
@@ -754,7 +764,7 @@ export const DetailModal: React.FC<DetailModalProps> = ({
                           <span>{preset.label}</span>
                           {preset.recommended && (
                             <span className="rounded bg-violet-500/40 px-1.5 py-0.5 text-[9px] font-bold uppercase text-violet-200">
-                              Best
+                              {t.bestBadge}
                             </span>
                           )}
                         </div>
@@ -775,7 +785,7 @@ export const DetailModal: React.FC<DetailModalProps> = ({
                     className="flex items-center gap-2 rounded-xl bg-violet-600 px-4 py-2.5 text-xs font-bold text-white shadow-lg transition hover:bg-violet-500"
                   >
                     <HardDrive className="h-4 w-4" />
-                    Save Inside App (Watch Offline)
+                    {t.saveInsideApp}
                   </button>
                 )}
                 <button
@@ -784,7 +794,7 @@ export const DetailModal: React.FC<DetailModalProps> = ({
                   className="flex items-center gap-2 rounded-xl border border-white/20 bg-white/10 px-4 py-2.5 text-xs font-semibold text-white transition hover:bg-white/20 disabled:opacity-50"
                 >
                   <Smartphone className="h-4 w-4" />
-                  {savingToDevice ? 'Preparing...' : 'Save .mp4 to Phone'}
+                  {savingToDevice ? t.preparing : t.saveMp4ToPhone}
                 </button>
               </div>
             </div>
@@ -794,15 +804,15 @@ export const DetailModal: React.FC<DetailModalProps> = ({
           {hasMediaTrackBox && details && (
             <div className="rounded-2xl border border-white/10 bg-[#111524] p-4 space-y-3">
               {details.videoSpec && (
-                <div className="grid grid-cols-[96px_1fr] items-center gap-3 text-xs sm:text-sm">
-                  <span className="font-semibold text-zinc-400">Video</span>
+                <div className="grid grid-cols-[106px_1fr] items-center gap-3 text-xs sm:text-sm">
+                  <span className="font-semibold text-zinc-400">{t.videoLabel}</span>
                   <span className="font-semibold text-zinc-100">{details.videoSpec}</span>
                 </div>
               )}
 
               {details.audioTracks.length > 0 && (
-                <div className="grid grid-cols-[96px_1fr] items-center gap-3 text-xs sm:text-sm">
-                  <span className="font-semibold text-zinc-400">Audio</span>
+                <div className="grid grid-cols-[106px_1fr] items-center gap-3 text-xs sm:text-sm">
+                  <span className="font-semibold text-zinc-400">{t.audioLabel}</span>
                   {details.audioTracks.length > 1 ? (
                     isTv ? (
                       <div data-tv-row="detail-audio" className="no-scrollbar flex items-center gap-2 overflow-x-auto py-1">
@@ -820,36 +830,40 @@ export const DetailModal: React.FC<DetailModalProps> = ({
                                   : 'border-white/15 bg-obsidian/80 text-zinc-300'
                               }`}
                             >
-                              {a.label}
+                              {localizeTrackLabel(a.label, a.language, lang)}
                             </button>
                           );
                         })}
                       </div>
                     ) : (
                       <select
-                        aria-label="Audio track"
+                        aria-label={t.audioLabel}
                         value={selectedAudioIndex ?? details.audioTracks[0].index}
                         onChange={(e) => setSelectedAudioIndex(Number(e.target.value))}
                         className="w-full max-w-md rounded-xl border border-white/15 bg-surface px-3 py-1.5 text-xs sm:text-sm font-medium text-white outline-none transition focus:border-violet-400"
                       >
                         {details.audioTracks.map((a) => (
                           <option key={a.index} value={a.index}>
-                            {a.label}
+                            {localizeTrackLabel(a.label, a.language, lang)}
                           </option>
                         ))}
                       </select>
                     )
                   ) : (
                     <span className="font-semibold text-zinc-100">
-                      {details.audioTracks[0].label}
+                      {localizeTrackLabel(
+                        details.audioTracks[0].label,
+                        details.audioTracks[0].language,
+                        lang
+                      )}
                     </span>
                   )}
                 </div>
               )}
 
               {details.subtitleTracks.length > 0 && (
-                <div className="grid grid-cols-[96px_1fr] items-center gap-3 text-xs sm:text-sm">
-                  <span className="font-semibold text-zinc-400">Subtitles</span>
+                <div className="grid grid-cols-[106px_1fr] items-center gap-3 text-xs sm:text-sm">
+                  <span className="font-semibold text-zinc-400">{t.subtitlesLabel}</span>
                   {isTv ? (
                     <div data-tv-row="detail-subs" className="no-scrollbar flex items-center gap-2 overflow-x-auto py-1">
                       <button
@@ -862,7 +876,7 @@ export const DetailModal: React.FC<DetailModalProps> = ({
                             : 'border-white/15 bg-obsidian/80 text-zinc-300'
                         }`}
                       >
-                        Off
+                        {t.off}
                       </button>
                       {details.subtitleTracks.map((s) => {
                         const active = selectedSubtitleIndex === s.index;
@@ -878,14 +892,14 @@ export const DetailModal: React.FC<DetailModalProps> = ({
                                 : 'border-white/15 bg-obsidian/80 text-zinc-300'
                             }`}
                           >
-                            {s.label}
+                            {localizeTrackLabel(s.label, s.language, lang)}
                           </button>
                         );
                       })}
                     </div>
                   ) : (
                     <select
-                      aria-label="Subtitle track"
+                      aria-label={t.subtitlesLabel}
                       value={selectedSubtitleIndex === null ? 'off' : String(selectedSubtitleIndex)}
                       onChange={(e) =>
                         setSelectedSubtitleIndex(
@@ -894,10 +908,10 @@ export const DetailModal: React.FC<DetailModalProps> = ({
                       }
                       className="w-full max-w-md rounded-xl border border-white/15 bg-surface px-3 py-1.5 text-xs sm:text-sm font-medium text-white outline-none transition focus:border-violet-400"
                     >
-                      <option value="off">Off</option>
+                      <option value="off">{t.off}</option>
                       {details.subtitleTracks.map((s) => (
                         <option key={s.index} value={String(s.index)}>
-                          {s.label}
+                          {localizeTrackLabel(s.label, s.language, lang)}
                         </option>
                       ))}
                     </select>
@@ -921,7 +935,7 @@ export const DetailModal: React.FC<DetailModalProps> = ({
                   : 'text-sm sm:text-[15px] leading-relaxed text-zinc-300'
               }
             >
-              {item.overview}
+              {formatOverviewText(item.overview, lang)}
             </p>
 
             {item.genres.length > 0 && (
@@ -931,7 +945,7 @@ export const DetailModal: React.FC<DetailModalProps> = ({
                     key={g}
                     className="rounded-full border border-white/15 bg-[#141828] px-3.5 py-1 text-xs font-semibold text-zinc-200"
                   >
-                    {g}
+                    {translateGenre(g, lang)}
                   </span>
                 ))}
               </div>
@@ -949,19 +963,25 @@ export const DetailModal: React.FC<DetailModalProps> = ({
                 <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
                   {details.directors.length > 0 && (
                     <div className="flex gap-2">
-                      <span className="w-24 flex-shrink-0 font-semibold text-zinc-400">Director</span>
+                      <span className="w-24 flex-shrink-0 font-semibold text-zinc-400">
+                        {t.directorLabel}
+                      </span>
                       <span className="font-semibold text-white">{details.directors.join(', ')}</span>
                     </div>
                   )}
                   {details.writers.length > 0 && (
                     <div className="flex gap-2">
-                      <span className="w-24 flex-shrink-0 font-semibold text-zinc-400">Writer</span>
+                      <span className="w-24 flex-shrink-0 font-semibold text-zinc-400">
+                        {t.writerLabel}
+                      </span>
                       <span className="font-semibold text-white">{details.writers.join(', ')}</span>
                     </div>
                   )}
                   {details.studios.length > 0 && (
                     <div className="flex gap-2">
-                      <span className="w-24 flex-shrink-0 font-semibold text-zinc-400">Studio</span>
+                      <span className="w-24 flex-shrink-0 font-semibold text-zinc-400">
+                        {t.studioLabel}
+                      </span>
                       <span className="text-zinc-200">{details.studios.join(', ')}</span>
                     </div>
                   )}
@@ -998,7 +1018,7 @@ export const DetailModal: React.FC<DetailModalProps> = ({
                 {/* Tags */}
                 {details.tags.length > 0 && (
                   <div className="flex flex-wrap items-center gap-1.5 pt-1">
-                    <span className="mr-1 text-xs font-semibold text-zinc-500">Tags:</span>
+                    <span className="mr-1 text-xs font-semibold text-zinc-500">{t.tagsLabel}</span>
                     {visibleTags.map((tag) => (
                       <span
                         key={tag}
@@ -1012,7 +1032,9 @@ export const DetailModal: React.FC<DetailModalProps> = ({
                         onClick={() => setShowAllTags(!showAllTags)}
                         className="rounded-md px-2 py-0.5 text-xs font-semibold text-zinc-200 hover:bg-white/10"
                       >
-                        {showAllTags ? 'Show less' : `+${details.tags.length - 10} more`}
+                        {showAllTags
+                          ? t.showLess
+                          : `+${details.tags.length - 10} ${t.moreCountSuffix}`}
                       </button>
                     )}
                   </div>
@@ -1026,11 +1048,11 @@ export const DetailModal: React.FC<DetailModalProps> = ({
               <div className="mb-4 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
                 <div className="flex items-center gap-3">
                   <h3 className={isTv ? 'text-xl font-extrabold text-white' : 'text-base font-bold text-white'}>
-                    Episodes
+                    {t.episodes}
                   </h3>
                   {seasons.length === 1 && selectedSeason && (
                     <span className="rounded-lg border border-white/20 bg-[#15192b] px-3 py-1 text-xs font-bold text-zinc-200">
-                      {selectedSeason.name}
+                      {formatSeasonLabel(selectedSeason.name, selectedSeason.seasonNumber, lang)}
                     </span>
                   )}
                 </div>
@@ -1055,7 +1077,7 @@ export const DetailModal: React.FC<DetailModalProps> = ({
                               : 'border-white/15 bg-[#141828] text-zinc-300 hover:bg-white/15 hover:text-white'
                           }`}
                         >
-                          {s.name}
+                          {formatSeasonLabel(s.name, s.seasonNumber, lang)}
                         </button>
                       );
                     })}
@@ -1064,7 +1086,7 @@ export const DetailModal: React.FC<DetailModalProps> = ({
               </div>
 
               {loadingEpisodes ? (
-                <p className="text-sm text-zinc-400">Loading episodes...</p>
+                <p className="text-sm text-zinc-400">{t.loadingEpisodes}</p>
               ) : (
                 <div className={isTv ? 'space-y-3.5' : 'max-h-96 space-y-2.5 overflow-y-auto pr-1'}>
                   {episodes.map((ep) => {
@@ -1158,7 +1180,7 @@ export const DetailModal: React.FC<DetailModalProps> = ({
                               isTv ? 'text-sm leading-relaxed' : 'text-xs text-zinc-400'
                             }`}
                           >
-                            {ep.overview}
+                            {formatOverviewText(ep.overview, lang)}
                           </p>
                         </div>
 
@@ -1170,7 +1192,7 @@ export const DetailModal: React.FC<DetailModalProps> = ({
                             {epActive ? (
                               <button
                                 onClick={() => cancelOfflineDownload(ep.id)}
-                                title="Cancel download"
+                                title={t.cancel}
                                 className="flex items-center gap-1 rounded-lg bg-violet-600/30 px-2 py-1.5 text-[11px] font-bold text-violet-200 hover:bg-violet-600/50"
                               >
                                 <span className="h-3 w-3 animate-spin rounded-full border-2 border-violet-300 border-t-transparent" />
@@ -1179,7 +1201,7 @@ export const DetailModal: React.FC<DetailModalProps> = ({
                             ) : epOffline ? (
                               <button
                                 onClick={() => deleteOfflineDownload(ep.id)}
-                                title={`Downloaded (${epOffline.qualityLabel} · ${formatBytes(epOffline.sizeBytes)}). Tap to delete.`}
+                                title={t.deleteOfflineCopy}
                                 className="flex items-center gap-1 rounded-lg bg-emerald-500/15 px-2 py-1.5 text-[11px] font-bold text-emerald-300 hover:bg-red-500/20 hover:text-red-300"
                               >
                                 <CheckCircle2 className="h-4 w-4" />
@@ -1191,7 +1213,7 @@ export const DetailModal: React.FC<DetailModalProps> = ({
                                   setSelectedPreset('standard');
                                   setDownloadTarget(ep);
                                 }}
-                                title="Download episode for offline viewing"
+                                title={t.download}
                                 className="rounded-lg p-2 text-zinc-400 transition hover:bg-white/10 hover:text-white"
                               >
                                 <Download className="h-4 w-4" />
@@ -1212,7 +1234,7 @@ export const DetailModal: React.FC<DetailModalProps> = ({
             <div className="border-t border-white/10 pt-5">
               <div className="mb-3 flex items-center justify-between">
                 <h3 className="text-base sm:text-lg font-bold text-white">
-                  Titles in this Collection
+                  {t.titlesInCollection}
                   {collectionItems.length > 0 && (
                     <span className="ml-2 text-xs font-semibold text-zinc-400">
                       ({collectionItems.length})
@@ -1221,9 +1243,9 @@ export const DetailModal: React.FC<DetailModalProps> = ({
                 </h3>
               </div>
               {loadingCollection ? (
-                <p className="text-xs text-zinc-400">Loading collection titles...</p>
+                <p className="text-xs text-zinc-400">{t.loadingCollection}</p>
               ) : collectionItems.length === 0 ? (
-                <p className="text-xs text-zinc-400">No titles found in this collection.</p>
+                <p className="text-xs text-zinc-400">{t.noCollectionTitles}</p>
               ) : (
                 <div className="grid grid-cols-2 gap-3.5 sm:grid-cols-4 md:grid-cols-5">
                   {collectionItems.map((colItem) => (
@@ -1271,7 +1293,7 @@ export const DetailModal: React.FC<DetailModalProps> = ({
             <div className="border-t border-white/10 pt-5">
               <div className="mb-3 flex items-center justify-between">
                 <h3 className="text-base sm:text-lg font-bold text-white">
-                  Chapters
+                  {t.chapters}
                   <span className="ml-2 text-xs font-semibold text-zinc-400">
                     ({details.chapters.length})
                   </span>
@@ -1352,7 +1374,7 @@ export const DetailModal: React.FC<DetailModalProps> = ({
             <div className="border-t border-white/10 pt-6">
               <div className="mb-3 flex items-center justify-between">
                 <h3 className={isTv ? 'text-xl font-extrabold text-white' : 'text-base sm:text-lg font-bold text-white'}>
-                  Cast &amp; Crew
+                  {t.castAndCrew}
                 </h3>
                 {!isTv && (
                   <div className="hidden sm:flex items-center gap-1.5">
@@ -1419,7 +1441,11 @@ export const DetailModal: React.FC<DetailModalProps> = ({
                       </p>
                       {person.role && (
                         <p className="truncate text-xs text-zinc-400">
-                          {person.type === 'Actor' ? `as ${person.role}` : person.role}
+                          {person.type === 'Actor'
+                            ? lang === 'ro'
+                              ? person.role
+                              : `as ${person.role}`
+                            : person.role}
                         </p>
                       )}
                     </button>
@@ -1432,8 +1458,15 @@ export const DetailModal: React.FC<DetailModalProps> = ({
                 <div className="mt-4 rounded-2xl border border-white/15 bg-[#111524] p-4 animate-fade-in">
                   <div className="mb-3 flex items-center justify-between">
                     <h4 className="text-xs sm:text-sm font-bold text-white">
-                      More with <span className="text-zinc-200">{selectedPerson.name}</span> in
-                      your library
+                      {lang === 'ro' ? (
+                        <>
+                          Alte titluri cu <span className="text-zinc-200">{selectedPerson.name}</span> în bibliotecă
+                        </>
+                      ) : (
+                        <>
+                          More with <span className="text-zinc-200">{selectedPerson.name}</span> in your library
+                        </>
+                      )}
                     </h4>
                     <button
                       onClick={() => {
@@ -1446,10 +1479,12 @@ export const DetailModal: React.FC<DetailModalProps> = ({
                     </button>
                   </div>
                   {loadingPersonItems ? (
-                    <p className="text-xs text-zinc-400">Searching your library...</p>
+                    <p className="text-xs text-zinc-400">{t.searchingLibrary}</p>
                   ) : personItems.length === 0 ? (
                     <p className="text-xs text-zinc-400">
-                      No other titles with {selectedPerson.name} in your library yet.
+                      {lang === 'ro'
+                        ? `Nu mai sunt alte titluri cu ${selectedPerson.name} în bibliotecă.`
+                        : `No other titles with ${selectedPerson.name} in your library yet.`}
                     </p>
                   ) : (
                     <div data-tv-row="detail-person-items" className="no-scrollbar flex gap-4 overflow-x-auto py-2">
@@ -1492,7 +1527,7 @@ export const DetailModal: React.FC<DetailModalProps> = ({
             <div className="border-t border-white/10 pt-6">
               <div className="mb-3 flex items-center justify-between">
                 <h3 className={isTv ? 'text-xl font-extrabold text-white' : 'text-base sm:text-lg font-bold text-white'}>
-                  More Like This
+                  {t.moreLikeThis}
                 </h3>
                 {!isTv && (
                   <div className="hidden sm:flex items-center gap-1.5">
@@ -1588,7 +1623,7 @@ export const DetailModal: React.FC<DetailModalProps> = ({
                 </a>
                 <button
                   onClick={() => setActiveTrailerUrl(null)}
-                  aria-label="Close trailer"
+                  aria-label={t.close}
                   className="rounded-lg p-1.5 text-zinc-300 hover:bg-white/15 hover:text-white"
                 >
                   <X className="h-4 w-4" />
@@ -1611,16 +1646,14 @@ export const DetailModal: React.FC<DetailModalProps> = ({
                 }
                 return (
                   <div className="flex h-full flex-col items-center justify-center gap-3 p-6 text-center">
-                    <p className="text-sm text-zinc-300">
-                      This trailer opens externally in your browser.
-                    </p>
+                    <p className="text-sm text-zinc-300">{t.trailerExternalNote}</p>
                     <a
                       href={activeTrailerUrl.url}
                       target="_blank"
                       rel="noopener noreferrer"
                       className="inline-flex items-center gap-2 rounded-full bg-violet-600 px-5 py-2.5 text-sm font-bold text-white hover:bg-violet-500"
                     >
-                      Open Trailer
+                      {t.openTrailer}
                       <ExternalLink className="h-4 w-4" />
                     </a>
                   </div>

@@ -1,5 +1,6 @@
 import React, { useEffect, useState } from 'react';
 import { Check, Info, Play, Plus, Star } from 'lucide-react';
+import { formatOverviewText, translateGenre, useI18n } from '../i18n';
 import type { MediaItem } from '../types/media';
 import { isTizenTv } from '../utils/tvNavigation';
 
@@ -18,6 +19,7 @@ export const HeroBanner: React.FC<HeroBannerProps> = ({
 }) => {
   const [imgFailed, setImgFailed] = useState(false);
   const isTv = isTizenTv();
+  const { lang, t } = useI18n();
 
   useEffect(() => {
     setImgFailed(false);
@@ -79,7 +81,7 @@ export const HeroBanner: React.FC<HeroBannerProps> = ({
                   : 'rounded-md bg-violet-600/90 px-2.5 py-1 uppercase tracking-wider text-white'
               }
             >
-              {item.type === 'Series' ? 'Featured Series' : 'Featured Film'}
+              {item.type === 'Series' ? t.featuredSeries : t.featuredFilm}
             </span>
             {item.rating && (
               <span
@@ -114,7 +116,7 @@ export const HeroBanner: React.FC<HeroBannerProps> = ({
             )}
             {isTv && item.genres.length > 0 && (
               <span className="text-zinc-300 font-semibold">
-                • {item.genres.slice(0, 3).join('  •  ')}
+                • {item.genres.slice(0, 3).map((g) => translateGenre(g, lang)).join('  •  ')}
               </span>
             )}
           </div>
@@ -136,7 +138,7 @@ export const HeroBanner: React.FC<HeroBannerProps> = ({
                 : 'mt-4 line-clamp-3 text-sm leading-relaxed text-zinc-200 sm:text-base'
             }
           >
-            {item.overview}
+            {formatOverviewText(item.overview, lang)}
           </p>
 
           {!isTv && item.genres.length > 0 && (
@@ -146,7 +148,7 @@ export const HeroBanner: React.FC<HeroBannerProps> = ({
                   key={g}
                   className="rounded-full bg-white/10 px-3 py-1 text-xs font-medium text-zinc-200 backdrop-blur-sm"
                 >
-                  {g}
+                  {translateGenre(g, lang)}
                 </span>
               ))}
             </div>
@@ -168,7 +170,7 @@ export const HeroBanner: React.FC<HeroBannerProps> = ({
               }
             >
               <Play className={isTv ? 'h-6 w-6 fill-obsidian' : 'h-5 w-5 fill-obsidian'} />
-              <span>{item.resumePositionSeconds ? 'Resume' : 'Play Now'}</span>
+              <span>{item.resumePositionSeconds ? t.resume : t.playNow}</span>
             </button>
 
             <button
@@ -181,13 +183,13 @@ export const HeroBanner: React.FC<HeroBannerProps> = ({
               }
             >
               <Info className={isTv ? 'h-6 w-6' : 'h-5 w-5'} />
-              <span>More Info</span>
+              <span>{t.moreInfo}</span>
             </button>
 
             <button
               data-tv-pill={isTv ? 'true' : undefined}
               onClick={() => onToggleFavorite(item)}
-              title={item.isFavorite ? 'Remove from My List' : 'Add to My List'}
+              title={item.isFavorite ? t.removeFromMyList : t.addToMyList}
               className={
                 isTv
                   ? 'flex items-center gap-2.5 rounded-full border border-white/25 bg-[#15192b]/95 px-6 py-3.5 text-base font-bold text-white shadow-xl transition'
@@ -199,7 +201,7 @@ export const HeroBanner: React.FC<HeroBannerProps> = ({
               ) : (
                 <Plus className={isTv ? 'h-6 w-6' : 'h-5 w-5'} />
               )}
-              {isTv && <span>{item.isFavorite ? 'In My List' : 'My List'}</span>}
+              {isTv && <span>{item.isFavorite ? t.inMyList : t.navMyList}</span>}
             </button>
           </div>
         </div>

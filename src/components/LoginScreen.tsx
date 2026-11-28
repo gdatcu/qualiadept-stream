@@ -6,6 +6,7 @@ import {
   Crown,
   Eye,
   EyeOff,
+  Globe,
   Lock,
   Play,
   Plus,
@@ -14,6 +15,7 @@ import {
   Trash2,
   User,
 } from 'lucide-react';
+import { useI18n } from '../i18n';
 import {
   authenticateJellyfin,
   createDemoSession,
@@ -61,6 +63,7 @@ export const LoginScreen: React.FC<LoginScreenProps> = ({
   activeUserId,
   sessionNotice,
 }) => {
+  const { lang, setLang, t } = useI18n();
   const [savedProfiles, setSavedProfiles] = useState<AuthSession[]>(() => loadSavedProfiles());
   const [publicUsers, setPublicUsers] = useState<PublicUserProfile[]>([]);
   const [serverUrl, setServerUrl] = useState(
@@ -151,6 +154,46 @@ export const LoginScreen: React.FC<LoginScreenProps> = ({
       <div className="tv-ambient-glow pointer-events-none absolute -top-40 -left-40 h-[520px] w-[520px] rounded-full bg-violet-700/25 blur-[140px]" />
       <div className="tv-ambient-glow pointer-events-none absolute -bottom-40 -right-40 h-[520px] w-[520px] rounded-full bg-indigo-600/20 blur-[140px]" />
 
+      {/* Top-Right EN / RO Language Selector (accessible on Login & Who's Watching on TV, Mobile & Web) */}
+      <div
+        data-tv-row={isTv ? 'login-topbar' : undefined}
+        className={`absolute z-20 flex items-center gap-1 rounded-full border border-white/15 p-1 shadow-xl ${
+          isTv
+            ? 'top-6 right-[3.8vw] bg-[#121626]'
+            : 'top-[max(1rem,var(--app-safe-top))] right-4 sm:right-6 bg-surface/90 backdrop-blur-md'
+        }`}
+      >
+        <Globe className={isTv ? 'ml-2.5 mr-1 h-4 w-4 text-violet-300' : 'ml-2 mr-0.5 h-3.5 w-3.5 text-violet-300'} />
+        <button
+          type="button"
+          data-tv-pill={isTv ? 'true' : undefined}
+          onClick={() => setLang('en')}
+          className={`rounded-full font-bold transition ${
+            isTv ? 'px-3.5 py-1.5 text-xs' : 'px-2.5 py-1 text-[11px]'
+          } ${
+            lang === 'en'
+              ? 'bg-violet-600 text-white shadow'
+              : 'text-zinc-300 hover:text-white'
+          }`}
+        >
+          EN
+        </button>
+        <button
+          type="button"
+          data-tv-pill={isTv ? 'true' : undefined}
+          onClick={() => setLang('ro')}
+          className={`rounded-full font-bold transition ${
+            isTv ? 'px-3.5 py-1.5 text-xs' : 'px-2.5 py-1 text-[11px]'
+          } ${
+            lang === 'ro'
+              ? 'bg-violet-600 text-white shadow'
+              : 'text-zinc-300 hover:text-white'
+          }`}
+        >
+          RO
+        </button>
+      </div>
+
       <div
         className={`relative z-10 w-full animate-fade-in ${
           isTv && hasAnyProfiles && !showLoginForm ? 'max-w-5xl' : 'max-w-xl'
@@ -167,7 +210,7 @@ export const LoginScreen: React.FC<LoginScreenProps> = ({
             }
           >
             <ArrowLeft className={isTv ? 'h-5 w-5' : 'h-4 w-4'} />
-            Back
+            {t.back}
           </button>
         )}
 
@@ -175,9 +218,7 @@ export const LoginScreen: React.FC<LoginScreenProps> = ({
         <div className={isTv ? 'mb-10 text-center' : 'mb-7 text-center'}>
           <BrandLogo size="lg" stacked />
           <p className={isTv ? 'mt-4 text-2xl font-bold text-zinc-200' : 'mt-3 text-sm text-zinc-400'}>
-            {hasAnyProfiles && !showLoginForm
-              ? "Who's watching?"
-              : 'Sign in with your personal family account'}
+            {hasAnyProfiles && !showLoginForm ? t.whosWatching : t.signInSubtitle}
           </p>
         </div>
 
@@ -262,14 +303,14 @@ export const LoginScreen: React.FC<LoginScreenProps> = ({
                             : 'mt-0.5 text-[10px] font-medium text-emerald-300'
                         }
                       >
-                        {isCurrent ? 'Active now' : 'Ready'}
+                        {isCurrent ? t.activeNow : t.ready}
                       </span>
                     </button>
 
                     {managingProfiles && (
                       <button
                         onClick={() => handleRemoveSaved(profile.userId)}
-                        title={`Remove ${profile.username} from this device`}
+                        title={`${t.removeFromDevice}: ${profile.username}`}
                         className="absolute -top-2 -right-2 flex h-8 w-8 items-center justify-center rounded-full bg-red-600 text-white shadow-lg hover:bg-red-500"
                       >
                         <Trash2 className="h-4 w-4" />
@@ -312,7 +353,7 @@ export const LoginScreen: React.FC<LoginScreenProps> = ({
                     {pub.name}
                   </span>
                   <span className={isTv ? 'mt-0.5 text-xs text-zinc-400' : 'mt-0.5 text-[10px] text-zinc-400'}>
-                    {pub.hasPassword ? 'Password protected' : 'Sign in'}
+                    {pub.hasPassword ? t.passwordProtected : t.signIn}
                   </span>
                 </button>
               ))}
@@ -348,10 +389,10 @@ export const LoginScreen: React.FC<LoginScreenProps> = ({
                       : 'mt-3 text-sm font-semibold'
                   }
                 >
-                  Add Account
+                  {t.addAccount}
                 </span>
                 <span className={isTv ? 'mt-0.5 text-xs text-zinc-500' : 'mt-0.5 text-[10px] text-zinc-500'}>
-                  Other profile
+                  {t.otherProfile}
                 </span>
               </button>
             </div>
@@ -367,7 +408,7 @@ export const LoginScreen: React.FC<LoginScreenProps> = ({
                       : 'rounded-xl border border-white/15 bg-white/5 px-4 py-1.5 text-xs font-semibold text-zinc-300 transition hover:bg-white/10 hover:text-white'
                   }
                 >
-                  {managingProfiles ? 'Done Managing' : 'Manage Device Profiles'}
+                  {managingProfiles ? t.doneManaging : t.manageDeviceProfiles}
                 </button>
               </div>
             )}
@@ -385,14 +426,14 @@ export const LoginScreen: React.FC<LoginScreenProps> = ({
                 className="mb-4 inline-flex items-center gap-1.5 text-xs font-semibold text-violet-300 hover:text-violet-200"
               >
                 <ArrowLeft className="h-3.5 w-3.5" />
-                Back to Who&apos;s Watching
+                {t.backToWhosWatching}
               </button>
             )}
 
             <form onSubmit={handleSubmit} className="space-y-4">
               <div>
                 <label className="mb-1.5 block text-xs font-semibold uppercase tracking-wider text-zinc-400">
-                  Username
+                  {t.username}
                 </label>
                 <div className="relative">
                   <User className="pointer-events-none absolute left-3.5 top-1/2 h-4 w-4 -translate-y-1/2 text-zinc-500" />
@@ -409,7 +450,7 @@ export const LoginScreen: React.FC<LoginScreenProps> = ({
                         }
                       }
                     }}
-                    placeholder="Enter your family username"
+                    placeholder={t.usernamePlaceholder}
                     autoCapitalize="none"
                     autoCorrect="off"
                     spellCheck={false}
@@ -421,7 +462,7 @@ export const LoginScreen: React.FC<LoginScreenProps> = ({
 
               <div>
                 <label className="mb-1.5 block text-xs font-semibold uppercase tracking-wider text-zinc-400">
-                  Password
+                  {t.password}
                 </label>
                 <div className="relative">
                   <Lock className="pointer-events-none absolute left-3.5 top-1/2 h-4 w-4 -translate-y-1/2 text-zinc-500" />
@@ -439,8 +480,8 @@ export const LoginScreen: React.FC<LoginScreenProps> = ({
                   <button
                     type="button"
                     onClick={() => setShowPassword((v) => !v)}
-                    aria-label={showPassword ? 'Hide password' : 'Show password'}
-                    title={showPassword ? 'Hide password' : 'Show password'}
+                    aria-label={showPassword ? t.hidePassword : t.showPassword}
+                    title={showPassword ? t.hidePassword : t.showPassword}
                     className="absolute right-2.5 top-1/2 -translate-y-1/2 rounded-lg p-1.5 text-zinc-400 transition hover:bg-white/10 hover:text-white"
                   >
                     {showPassword ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
@@ -456,7 +497,9 @@ export const LoginScreen: React.FC<LoginScreenProps> = ({
                   className="inline-flex items-center gap-1.5 text-[11px] font-medium text-zinc-400 hover:text-zinc-200"
                 >
                   <Server className="h-3.5 w-3.5" />
-                  <span>Server: {serverUrl.replace(/^https?:\/\//, '')}</span>
+                  <span>
+                    {t.serverLabel}: {serverUrl.replace(/^https?:\/\//, '')}
+                  </span>
                   {showAdvancedServer ? (
                     <ChevronUp className="h-3.5 w-3.5" />
                   ) : (
@@ -494,7 +537,7 @@ export const LoginScreen: React.FC<LoginScreenProps> = ({
                 className="flex w-full items-center justify-center gap-2 rounded-xl bg-gradient-to-r from-violet-600 to-indigo-600 py-3.5 text-sm font-bold text-white shadow-lg shadow-violet-600/30 transition hover:from-violet-500 hover:to-indigo-500 disabled:opacity-50"
               >
                 <Play className="h-4 w-4 fill-current" />
-                {loading ? 'Connecting...' : 'Sign In'}
+                {loading ? t.signingIn : t.signIn}
               </button>
             </form>
 
@@ -502,7 +545,7 @@ export const LoginScreen: React.FC<LoginScreenProps> = ({
               <>
                 <div className="my-5 flex items-center gap-3">
                   <div className="h-px flex-1 bg-white/10" />
-                  <span className="text-xs font-medium text-zinc-500">OR PREVIEW NOW</span>
+                  <span className="text-xs font-medium text-zinc-500">{t.orPreviewNow}</span>
                   <div className="h-px flex-1 bg-white/10" />
                 </div>
 
@@ -512,7 +555,7 @@ export const LoginScreen: React.FC<LoginScreenProps> = ({
                   className="flex w-full items-center justify-center gap-2 rounded-xl border border-white/15 bg-white/5 py-3 text-sm font-semibold text-zinc-200 transition hover:border-violet-400/50 hover:bg-white/10"
                 >
                   <Sparkles className="h-4 w-4 text-violet-400" />
-                  Launch Demo Preview (No Server Needed)
+                  {t.launchDemoPreview}
                 </button>
               </>
             )}
@@ -520,7 +563,7 @@ export const LoginScreen: React.FC<LoginScreenProps> = ({
         )}
 
         <p className="mt-6 text-center text-xs text-zinc-500">
-          Hosted on <span className="text-zinc-300">qualiadept.eu</span>
+          {t.hostedOn} <span className="text-zinc-300">qualiadept.eu</span>
         </p>
       </div>
     </div>

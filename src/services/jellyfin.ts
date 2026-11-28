@@ -19,6 +19,7 @@ import {
   type StreamPlayMethod,
   type SubtitleTrack,
 } from '../types/media';
+import { getAcceptLanguageHeader } from '../i18n';
 import {
   canMsePlayHevc,
   formatResolutionBadge,
@@ -49,13 +50,17 @@ async function fetchWithRetry(
 ): Promise<Response> {
   const timeoutMs = options.timeoutMs ?? 12_000;
   const maxRetries = options.retries ?? 1;
+  const mergedHeaders: Record<string, string> = {
+    'Accept-Language': getAcceptLanguageHeader(),
+    ...((init.headers as Record<string, string> | undefined) || {}),
+  };
 
   let lastError: unknown;
   for (let attempt = 0; attempt <= maxRetries; attempt++) {
     const controller = new AbortController();
     const timer = window.setTimeout(() => controller.abort(), timeoutMs);
     try {
-      const res = await fetch(url, { ...init, signal: controller.signal });
+      const res = await fetch(url, { ...init, headers: mergedHeaders, signal: controller.signal });
       window.clearTimeout(timer);
       if (attempt < maxRetries && (res.status === 502 || res.status === 503 || res.status === 504)) {
         await new Promise((r) => window.setTimeout(r, 700));

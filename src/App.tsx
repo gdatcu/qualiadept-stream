@@ -45,6 +45,12 @@ import type {
   PersonCredit,
   PlaybackStartOptions,
 } from './types/media';
+import {
+  I18nProvider,
+  translateGenre,
+  translateLibraryName,
+  useI18n,
+} from './i18n';
 import { exitTizenApp, initTvNavigation, isTizenTv } from './utils/tvNavigation';
 
 const DownloadsView = lazy(() =>
@@ -71,8 +77,40 @@ const LazyViewFallback: React.FC<{ fullscreen?: boolean }> = ({ fullscreen }) =>
 
 export const App: React.FC = () => {
   const [session, setSession] = useState<AuthSession | null>(() => loadSavedSession());
-  const [sessionNotice, setSessionNotice] = useState<string | null>(null);
   const [switchingProfile, setSwitchingProfile] = useState(false);
+
+  return (
+    <I18nProvider
+      activeUserId={switchingProfile ? null : session?.userId}
+      isHiddenProfile={session?.isHidden}
+    >
+      <AppContent
+        session={session}
+        setSession={setSession}
+        switchingProfile={switchingProfile}
+        setSwitchingProfile={setSwitchingProfile}
+      />
+    </I18nProvider>
+  );
+};
+
+interface AppContentProps {
+  session: AuthSession | null;
+  setSession: React.Dispatch<React.SetStateAction<AuthSession | null>>;
+  switchingProfile: boolean;
+  setSwitchingProfile: React.Dispatch<React.SetStateAction<boolean>>;
+}
+
+const AppContent: React.FC<AppContentProps> = ({
+  session,
+  setSession,
+  switchingProfile,
+  setSwitchingProfile,
+}) => {
+  const { lang, t } = useI18n();
+  const tRef = useRef(t);
+  tRef.current = t;
+  const [sessionNotice, setSessionNotice] = useState<string | null>(null);
   const [items, setItems] = useState<MediaItem[]>(() => {
     const saved = loadSavedSession();
     if (!saved || saved.isDemo) return [];
@@ -175,13 +213,13 @@ export const App: React.FC = () => {
   }, []);
 
   const handleManualUpdateCheck = useCallback(async () => {
-    flashStatusToast('Checking for updates...');
+    flashStatusToast(tRef.current.checkingForUpdates);
     const info = await checkForAppUpdate({ force: true });
     if (info) {
       setStatusToast(null);
       setAvailableUpdate(info);
     } else {
-      flashStatusToast(`You're on the latest version (v${APP_VERSION_NAME})`);
+      flashStatusToast(`${tRef.current.onLatestVersion} (v${APP_VERSION_NAME})`);
     }
   }, [flashStatusToast]);
 
@@ -197,8 +235,8 @@ export const App: React.FC = () => {
     setSelectedItem(null);
     setPlayingItem(null);
     setError(null);
-    setSessionNotice('Your session expired or your password was updated. Please sign in again.');
-  }, []);
+    setSessionNotice(tRef.current.sessionExpiredNotice);
+  }, [setSession, setSwitchingProfile]);
 
   const closePlayer = useCallback(() => {
     setPlayingItem(null);
@@ -258,7 +296,7 @@ export const App: React.FC = () => {
         if (!hasVisibleCatalog && itemsRef.current.length === 0) {
           setError(err instanceof Error ? err.message : 'Failed to load library');
         } else if (!options?.background) {
-          flashStatusToast('Offline · showing cached catalog');
+          flashStatusToast(tRef.current.offlineShowingCached);
         }
         // If offline / Airplane Mode and user already has saved downloads, jump straight to them
         if (navigator.onLine === false && listOfflineRecords().length > 0 && itemsRef.current.length === 0) {
@@ -545,9 +583,9 @@ export const App: React.FC = () => {
       setItems((prev) => prev.map(patch));
       setResumeItems((prev) => (next ? prev.filter((i) => i.id !== item.id) : prev.map(patch)));
       setSelectedItem((prev) => (prev && prev.id === item.id ? patch(prev) : prev));
-      flashStatusToast(next ? 'Marked as played' : 'Marked as unplayed');
+      flashStatusToast(next ? t.markedPlayed : t.markedUnplayed);
     } catch {
-      flashStatusToast('Could not update watched status');
+      flashStatusToast(t.couldNotUpdateWatched);
     }
   };
 
@@ -561,9 +599,9 @@ export const App: React.FC = () => {
     );
     try {
       await removeFromContinueWatching(session, item.id);
-      flashStatusToast(`Removed "${item.name}" from Continue Watching`);
+      flashStatusToast(`${t.removedFromContinue} · ${item.name}`);
     } catch {
-      flashStatusToast('Could not update Continue Watching');
+      flashStatusToast(t.couldNotUpdateContinue);
     }
   };
 
@@ -629,15 +667,25 @@ export const App: React.FC = () => {
       return selectedSearchPersonItems;
     }
 
-    const q = searchQuery.trim().toLowerCase();
+    const fold = (s: string) =>
+      s
+        .toLowerCase()
+        .normalize('NFD')
+        .replace(/[\u0300-\u036f]/g, '');
+    const q = fold(searchQuery.trim());
     const localMatched = tabBaseItems.filter((item) => {
       if (selectedGenre && !item.genres.includes(selectedGenre)) return false;
       if (!q) return true;
       return (
-        item.name.toLowerCase().includes(q) ||
-        item.overview.toLowerCase().includes(q) ||
+        fold(item.name).includes(q) ||
+        fold(item.overview).includes(q) ||
         String(item.year || '').includes(q) ||
-        item.genres.some((g) => g.toLowerCase().includes(q))
+        item.genres.some(
+          (g) =>
+            fold(g).includes(q) ||
+            fold(translateGenre(g, 'ro')).includes(q) ||
+            fold(translateGenre(g, 'en')).includes(q)
+        )
       );
     });
 
@@ -781,7 +829,7 @@ export const App: React.FC = () => {
         <div className="flex min-h-screen items-center justify-center">
           <div className="text-center">
             <div className="mx-auto h-12 w-12 animate-spin rounded-full border-4 border-white border-t-transparent" />
-            <p className="mt-4 text-base font-medium text-zinc-300">Loading your cinema...</p>
+            <p className="mt-4 text-base font-medium text-zinc-300">{t.loadingCinema}</p>
           </div>
         </div>
       ) : error ? (
@@ -793,14 +841,14 @@ export const App: React.FC = () => {
               onClick={() => loadLibrary(session)}
               className="rounded-full bg-white px-6 py-3 text-sm font-extrabold text-obsidian hover:bg-zinc-200"
             >
-              Retry
+              {t.retry}
             </button>
             {offlineCount > 0 && (
               <button
                 onClick={() => setActiveTab('downloads')}
                 className="rounded-full border border-emerald-400/30 bg-emerald-500/15 px-5 py-3 text-sm font-semibold text-emerald-200 hover:bg-emerald-500/25"
               >
-                Open Offline Downloads ({offlineCount})
+                {t.openOfflineDownloads} ({offlineCount})
               </button>
             )}
           </div>
@@ -835,7 +883,7 @@ export const App: React.FC = () => {
           >
             {activeTab === 'home' && !isFilteredGridMode && !selectedLibraryId && resumeItems.length > 0 && (
               <MediaRow
-                title="Continue Watching"
+                title={t.continueWatching}
                 items={resumeItems}
                 showProgress
                 onSelect={setSelectedItem}
@@ -851,7 +899,7 @@ export const App: React.FC = () => {
 
             {activeTab === 'home' && !isFilteredGridMode && !selectedLibraryId && nextUpItems.length > 0 && (
               <MediaRow
-                title="Up Next"
+                title={t.upNext}
                 items={nextUpItems}
                 onSelect={setSelectedItem}
                 onPlay={(item) => {
@@ -894,7 +942,7 @@ export const App: React.FC = () => {
                   }
                 >
                   <Folder className={isTv ? 'h-4 w-4' : 'h-3.5 w-3.5'} />
-                  All Libraries
+                  {t.allLibraries}
                 </button>
                 {libraryViews.map((view) => {
                   const active = selectedLibraryId === view.id;
@@ -920,7 +968,7 @@ export const App: React.FC = () => {
                             }`
                       }
                     >
-                      {view.name}
+                      {translateLibraryName(view.name, lang)}
                     </button>
                   );
                 })}
@@ -953,7 +1001,7 @@ export const App: React.FC = () => {
                       type="text"
                       value={searchQuery}
                       onChange={(e) => handleSearchChange(e.target.value)}
-                      placeholder="Search movies, series, actors, or year..."
+                      placeholder={t.searchPlaceholderTv}
                       className="flex-1 bg-transparent text-lg font-semibold text-white placeholder-zinc-500 outline-none"
                     />
                     {searchQuery && (
@@ -964,7 +1012,7 @@ export const App: React.FC = () => {
                         className="flex items-center gap-1.5 rounded-full border border-white/15 bg-white/10 px-4 py-1.5 text-sm font-bold text-zinc-200"
                       >
                         <X className="h-4 w-4" />
-                        Clear
+                        {t.clear}
                       </button>
                     )}
                   </div>
@@ -973,20 +1021,27 @@ export const App: React.FC = () => {
                 <div className="flex flex-wrap items-center justify-between gap-4">
                   <h1 className="text-3xl font-black tracking-tight text-white">
                     {selectedSearchPerson
-                      ? `Titles with ${selectedSearchPerson.name}`
+                      ? lang === 'ro'
+                        ? `Titluri cu ${selectedSearchPerson.name}`
+                        : `Titles with ${selectedSearchPerson.name}`
                       : tvSearchOpen && !searchQuery.trim()
-                      ? 'Search Catalog'
+                      ? t.searchCatalog
                       : searchQuery.trim()
-                      ? `Results for "${searchQuery.trim()}"`
+                      ? lang === 'ro'
+                        ? `Rezultate pentru „${searchQuery.trim()}”`
+                        : `Results for "${searchQuery.trim()}"`
                       : selectedLibraryId
-                      ? libraryViews.find((v) => v.id === selectedLibraryId)?.name || 'Library'
+                      ? translateLibraryName(
+                          libraryViews.find((v) => v.id === selectedLibraryId)?.name || t.catalog,
+                          lang
+                        )
                       : activeTab === 'movies'
-                      ? 'Movies'
+                      ? t.navMovies
                       : activeTab === 'series'
-                      ? 'TV Series'
+                      ? t.tvSeries
                       : activeTab === 'mylist'
-                      ? 'My List'
-                      : 'Catalog'}{' '}
+                      ? t.navMyList
+                      : t.catalog}{' '}
                     <span className="ml-1 text-lg font-semibold text-zinc-400">
                       ({filteredItems.length})
                     </span>
@@ -996,10 +1051,10 @@ export const App: React.FC = () => {
                   <div data-tv-row="tv-sort" className="flex items-center gap-2">
                     {(
                       [
-                        { id: 'recent', label: 'Recent' },
-                        { id: 'rating', label: 'Top Rated' },
-                        { id: 'year', label: 'Newest' },
-                        { id: 'az', label: 'A–Z' },
+                        { id: 'recent', label: t.sortRecentShort },
+                        { id: 'rating', label: t.sortTopRated },
+                        { id: 'year', label: t.sortNewestShort },
+                        { id: 'az', label: t.sortAzShort },
                       ] as const
                     ).map((opt) => (
                       <button
@@ -1035,7 +1090,7 @@ export const App: React.FC = () => {
                           : 'border-white/12 bg-[#121626] text-zinc-300'
                       }`}
                     >
-                      All Genres
+                      {t.allGenres}
                     </button>
                     {availableGenres.map((g) => {
                       const active = selectedGenre === g.name;
@@ -1051,7 +1106,7 @@ export const App: React.FC = () => {
                               : 'border-white/12 bg-[#121626] text-zinc-300'
                           }`}
                         >
-                          <span>{g.name}</span>
+                          <span>{translateGenre(g.name, lang)}</span>
                           <span className="opacity-65">{g.count}</span>
                         </button>
                       );
@@ -1065,7 +1120,7 @@ export const App: React.FC = () => {
             {searchQuery.trim().length >= 2 && remoteSearchPeople.length > 0 && (
               <div className={isTv ? 'mb-6 px-[3.8vw]' : 'mb-5 px-4 sm:px-8'}>
                 <div className="mb-2 text-xs font-bold uppercase tracking-wider text-zinc-400">
-                  Cast &amp; Crew
+                  {t.castAndCrew}
                 </div>
                 <div
                   data-tv-row="search-people"
@@ -1111,13 +1166,12 @@ export const App: React.FC = () => {
                 {searchQuery.trim() || selectedGenre || selectedSearchPerson ? (
                   <div>
                     <p className={isTv ? 'text-lg text-zinc-300' : 'text-sm text-zinc-300'}>
-                      No titles found
-                      {selectedSearchPerson ? ` featuring ${selectedSearchPerson.name}` : ''}
-                      {selectedGenre ? ` in ${selectedGenre}` : ''}
+                      {t.noTitlesFound}
+                      {selectedSearchPerson ? ` · ${selectedSearchPerson.name}` : ''}
+                      {selectedGenre ? ` · ${translateGenre(selectedGenre, lang)}` : ''}
                       {searchQuery.trim() && !selectedSearchPerson
-                        ? ` matching "${searchQuery.trim()}"`
+                        ? ` · "${searchQuery.trim()}"`
                         : ''}
-                      .
                     </p>
                     <button
                       data-tv-pill={isTv ? 'true' : undefined}
@@ -1133,15 +1187,15 @@ export const App: React.FC = () => {
                           : 'mt-4 rounded-xl bg-violet-600 px-4 py-2 text-xs font-semibold text-white hover:bg-violet-500'
                       }
                     >
-                      Clear Filters
+                      {t.clearFilters}
                     </button>
                   </div>
                 ) : activeTab === 'mylist' ? (
                   <p className={isTv ? 'text-lg text-zinc-300' : 'text-sm text-zinc-400'}>
-                    Your list is empty. Add any movie or series to My List to find it here.
+                    {t.emptyMyList}
                   </p>
                 ) : (
-                  'No titles in this library yet.'
+                  t.emptyLibrary
                 )}
               </div>
             ) : showGridSection ? (
@@ -1150,28 +1204,35 @@ export const App: React.FC = () => {
                   <div className="mb-4 flex items-center justify-between">
                     <h2 className="text-lg sm:text-xl font-bold text-white">
                       {selectedSearchPerson
-                        ? `Titles with ${selectedSearchPerson.name}`
+                        ? lang === 'ro'
+                          ? `Titluri cu ${selectedSearchPerson.name}`
+                          : `Titles with ${selectedSearchPerson.name}`
                         : searchQuery.trim()
-                        ? `Results for "${searchQuery.trim()}"${selectedGenre ? ` · ${selectedGenre}` : ''}`
+                        ? `${
+                            lang === 'ro'
+                              ? `Rezultate pentru „${searchQuery.trim()}”`
+                              : `Results for "${searchQuery.trim()}"`
+                          }${selectedGenre ? ` · ${translateGenre(selectedGenre, lang)}` : ''}`
                         : selectedLibraryId
-                        ? `${libraryViews.find((v) => v.id === selectedLibraryId)?.name || 'Library'}${
-                            selectedGenre ? ` · ${selectedGenre}` : ''
-                          }`
+                        ? `${translateLibraryName(
+                            libraryViews.find((v) => v.id === selectedLibraryId)?.name || t.catalog,
+                            lang
+                          )}${selectedGenre ? ` · ${translateGenre(selectedGenre, lang)}` : ''}`
                         : selectedGenre
-                        ? `${selectedGenre}${
+                        ? `${translateGenre(selectedGenre, lang)}${
                             activeTab === 'movies'
-                              ? ' Movies'
+                              ? ` · ${t.navMovies}`
                               : activeTab === 'series'
-                              ? ' TV Series'
+                              ? ` · ${t.tvSeries}`
                               : ''
                           }`
                         : activeTab === 'movies'
-                        ? 'All Movies'
+                        ? t.allMovies
                         : activeTab === 'series'
-                        ? 'All TV Series'
+                        ? t.allSeries
                         : activeTab === 'mylist'
-                        ? 'My List'
-                        : 'All Titles'}{' '}
+                        ? t.navMyList
+                        : t.allTitles}{' '}
                       <span className="text-sm font-medium text-zinc-400">
                         ({filteredItems.length})
                       </span>
@@ -1237,10 +1298,10 @@ export const App: React.FC = () => {
                         {!item.isPlayed && !isTv && (
                           <div className="absolute top-2 left-2 rounded-md bg-black/70 px-1.5 py-0.5 text-[10px] font-bold uppercase tracking-wider text-zinc-200 backdrop-blur-sm">
                             {item.type === 'Series'
-                              ? 'Series'
+                              ? t.seriesBadge
                               : item.type === 'BoxSet'
-                              ? 'Collection'
-                              : 'Movie'}
+                              ? t.collectionBadge
+                              : t.movieBadge}
                           </div>
                         )}
                         {item.rating && (
@@ -1274,7 +1335,9 @@ export const App: React.FC = () => {
                           }
                         >
                           {item.year ? `${item.year}` : ''}
-                          {item.genres[0] ? `${item.year ? ' · ' : ''}${item.genres[0]}` : ''}
+                          {item.genres[0]
+                            ? `${item.year ? ' · ' : ''}${translateGenre(item.genres[0], lang)}`
+                            : ''}
                         </p>
                       </div>
                     </div>
@@ -1284,7 +1347,7 @@ export const App: React.FC = () => {
             ) : (
               <>
                 <MediaRow
-                  title="Recently Added"
+                  title={t.recentlyAdded}
                   items={recentlyAddedItems}
                   onSelect={setSelectedItem}
                   onPlay={(item) =>
@@ -1298,7 +1361,7 @@ export const App: React.FC = () => {
 
                 {collections.length > 0 && (
                   <MediaRow
-                    title="Collections"
+                    title={t.collections}
                     items={collections}
                     onSelect={setSelectedItem}
                     onPlay={setSelectedItem}
@@ -1308,7 +1371,7 @@ export const App: React.FC = () => {
                 {genreRows.map(([genre, list]) => (
                   <MediaRow
                     key={genre}
-                    title={genre}
+                    title={translateGenre(genre, lang)}
                     items={list}
                     onSelect={setSelectedItem}
                     onPlay={(item) =>
@@ -1377,7 +1440,7 @@ export const App: React.FC = () => {
               : 'pointer-events-none fixed bottom-[calc(2rem+var(--app-safe-bottom))] left-1/2 z-[60] -translate-x-1/2 rounded-full border border-white/15 bg-black/85 px-4 py-2 text-xs font-semibold text-white shadow-2xl backdrop-blur-md'
           }
         >
-          Press Back again to exit
+          {t.pressBackAgainToExit}
         </div>
       )}
 

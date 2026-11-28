@@ -17,6 +17,7 @@ import {
   Users,
   X,
 } from 'lucide-react';
+import { useI18n, type AppLanguage } from '../i18n';
 import {
   createFamilyUser,
   deleteFamilyUser,
@@ -53,20 +54,23 @@ function getAvatarGradient(name: string): string {
   return AVATAR_GRADIENTS[Math.abs(hash) % AVATAR_GRADIENTS.length];
 }
 
-function formatLastSeen(iso?: string): string {
-  if (!iso) return 'Never signed in yet';
+function formatLastSeen(iso: string | undefined, lang: AppLanguage): string {
+  if (!iso) return lang === 'ro' ? 'Nu s-a conectat încă' : 'Never signed in yet';
   const diffMs = Date.now() - new Date(iso).getTime();
-  if (!Number.isFinite(diffMs) || diffMs < 0) return 'Active recently';
+  if (!Number.isFinite(diffMs) || diffMs < 0) {
+    return lang === 'ro' ? 'Activ recent' : 'Active recently';
+  }
   const mins = Math.floor(diffMs / 60_000);
-  if (mins < 2) return 'Active just now';
-  if (mins < 60) return `Active ${mins}m ago`;
+  if (mins < 2) return lang === 'ro' ? 'Activ chiar acum' : 'Active just now';
+  if (mins < 60) return lang === 'ro' ? `Activ acum ${mins}m` : `Active ${mins}m ago`;
   const hrs = Math.floor(mins / 60);
-  if (hrs < 24) return `Active ${hrs}h ago`;
+  if (hrs < 24) return lang === 'ro' ? `Activ acum ${hrs}h` : `Active ${hrs}h ago`;
   const days = Math.floor(hrs / 24);
-  return `Active ${days}d ago`;
+  return lang === 'ro' ? `Activ acum ${days}z` : `Active ${days}d ago`;
 }
 
 export const FamilyAdminView: React.FC<FamilyAdminViewProps> = ({ session }) => {
+  const { lang, t } = useI18n();
   const [users, setUsers] = useState<FamilyUser[]>([]);
   const [streams, setStreams] = useState<ActiveStreamSession[]>([]);
   const [loading, setLoading] = useState(true);
@@ -137,7 +141,11 @@ export const FamilyAdminView: React.FC<FamilyAdminViewProps> = ({ session }) => 
       setNewPassword('');
       setNewTier('adult');
       setShowCreateForm(false);
-      flashNotice(`Created family member "${created.name}" (non-admin).`);
+      flashNotice(
+        lang === 'ro'
+          ? `Contul „${created.name}” a fost creat.`
+          : `Created family member "${created.name}" (non-admin).`
+      );
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to create family member');
     } finally {
@@ -170,7 +178,11 @@ export const FamilyAdminView: React.FC<FamilyAdminViewProps> = ({ session }) => 
       await resetFamilyUserPassword(session, user.id, resetPwValue);
       setResetUserId(null);
       setResetPwValue('');
-      flashNotice(`Updated password for "${user.name}".`);
+      flashNotice(
+        lang === 'ro'
+          ? `Parola pentru „${user.name}” a fost actualizată.`
+          : `Updated password for "${user.name}".`
+      );
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to reset password');
     } finally {
@@ -185,7 +197,7 @@ export const FamilyAdminView: React.FC<FamilyAdminViewProps> = ({ session }) => 
       await deleteFamilyUser(session, user.id);
       setUsers((prev) => prev.filter((u) => u.id !== user.id));
       setConfirmDeleteId(null);
-      flashNotice(`Removed "${user.name}".`);
+      flashNotice(lang === 'ro' ? `Contul „${user.name}” a fost șters.` : `Removed "${user.name}".`);
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to delete account');
     } finally {
@@ -197,10 +209,8 @@ export const FamilyAdminView: React.FC<FamilyAdminViewProps> = ({ session }) => 
     return (
       <main className="mx-auto max-w-3xl px-4 pt-[calc(7.5rem+var(--app-safe-top))] pb-16 text-center">
         <Shield className="mx-auto h-10 w-10 text-zinc-500" />
-        <h1 className="mt-3 text-xl font-bold text-white">Administrator Access Only</h1>
-        <p className="mt-1 text-sm text-zinc-400">
-          Only the owner account can manage family profiles.
-        </p>
+        <h1 className="mt-3 text-xl font-bold text-white">{t.adminOnlyTitle}</h1>
+        <p className="mt-1 text-sm text-zinc-400">{t.adminOnlyDesc}</p>
       </main>
     );
   }
@@ -212,11 +222,20 @@ export const FamilyAdminView: React.FC<FamilyAdminViewProps> = ({ session }) => 
         <div>
           <h1 className="flex items-center gap-2.5 text-2xl font-black text-white sm:text-3xl">
             <Users className="h-6 w-6 text-violet-400" />
-            Family &amp; Profiles
+            {t.familyAndProfiles}
           </h1>
           <p className="mt-1 text-xs text-zinc-400 sm:text-sm">
-            Each family member gets their own Continue Watching &amp; My List. Only{' '}
-            <span className="font-semibold text-violet-300">{session.username}</span> stays Admin.
+            {lang === 'ro' ? (
+              <>
+                Fiecare membru are propria listă și propriul istoric de vizionare. Doar{' '}
+                <span className="font-semibold text-violet-300">{session.username}</span> rămâne Admin.
+              </>
+            ) : (
+              <>
+                Each family member gets their own Continue Watching &amp; My List. Only{' '}
+                <span className="font-semibold text-violet-300">{session.username}</span> stays Admin.
+              </>
+            )}
           </p>
         </div>
 
@@ -227,14 +246,14 @@ export const FamilyAdminView: React.FC<FamilyAdminViewProps> = ({ session }) => 
             className="flex items-center gap-1.5 rounded-xl border border-white/15 bg-white/5 px-3.5 py-2 text-xs font-semibold text-zinc-200 transition hover:bg-white/10 disabled:opacity-50"
           >
             <RefreshCw className={`h-3.5 w-3.5 ${loading ? 'animate-spin' : ''}`} />
-            Refresh
+            {t.refresh}
           </button>
           <button
             onClick={() => setShowCreateForm((v) => !v)}
             className="flex items-center gap-1.5 rounded-xl bg-gradient-to-r from-violet-600 to-indigo-600 px-4 py-2 text-xs font-bold text-white shadow-lg shadow-violet-600/25 transition hover:from-violet-500 hover:to-indigo-500"
           >
             <UserPlus className="h-4 w-4" />
-            Add Family Member
+            {t.addFamilyMember}
           </button>
         </div>
       </div>
@@ -268,10 +287,8 @@ export const FamilyAdminView: React.FC<FamilyAdminViewProps> = ({ session }) => 
         >
           <div className="mb-4 flex items-center justify-between">
             <div>
-              <h2 className="text-base font-bold text-white">New Family Member</h2>
-              <p className="text-xs text-zinc-400">
-                Created as a standard viewer (Admin &amp; Delete permissions permanently disabled).
-              </p>
+              <h2 className="text-base font-bold text-white">{t.newFamilyMember}</h2>
+              <p className="text-xs text-zinc-400">{t.newFamilyMemberDesc}</p>
             </div>
             <button
               type="button"
@@ -285,13 +302,13 @@ export const FamilyAdminView: React.FC<FamilyAdminViewProps> = ({ session }) => 
           <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
             <div>
               <label className="mb-1.5 block text-[11px] font-bold uppercase tracking-wider text-zinc-400">
-                Username
+                {t.username}
               </label>
               <input
                 type="text"
                 value={newName}
                 onChange={(e) => setNewName(e.target.value)}
-                placeholder="e.g. mama, andrei, kids"
+                placeholder="ex: mama, andrei, copii"
                 autoCapitalize="none"
                 autoCorrect="off"
                 required
@@ -301,13 +318,13 @@ export const FamilyAdminView: React.FC<FamilyAdminViewProps> = ({ session }) => 
 
             <div>
               <label className="mb-1.5 block text-[11px] font-bold uppercase tracking-wider text-zinc-400">
-                Password (min 4 chars)
+                {t.passwordMinChars}
               </label>
               <input
                 type="text"
                 value={newPassword}
                 onChange={(e) => setNewPassword(e.target.value)}
-                placeholder="Choose a simple family password"
+                placeholder={lang === 'ro' ? 'Alege o parolă simplă' : 'Choose a simple family password'}
                 autoCapitalize="none"
                 autoCorrect="off"
                 required
@@ -318,14 +335,14 @@ export const FamilyAdminView: React.FC<FamilyAdminViewProps> = ({ session }) => 
 
             <div>
               <label className="mb-1.5 block text-[11px] font-bold uppercase tracking-wider text-zinc-400">
-                Content Access
+                {t.contentAccess}
               </label>
               <div className="grid grid-cols-3 gap-2">
                 {(
                   [
-                    { id: 'adult', label: 'Adult', desc: 'All titles' },
-                    { id: 'teen', label: 'Teen', desc: 'Up to PG-13' },
-                    { id: 'kids', label: 'Kids', desc: 'PG & G only' },
+                    { id: 'adult', label: t.tierAdult, desc: t.tierAdultDesc },
+                    { id: 'teen', label: t.tierTeen, desc: t.tierTeenDesc },
+                    { id: 'kids', label: t.tierKids, desc: t.tierKidsDesc },
                   ] as const
                 ).map((opt) => (
                   <button
@@ -347,17 +364,23 @@ export const FamilyAdminView: React.FC<FamilyAdminViewProps> = ({ session }) => 
 
             <div>
               <label className="mb-1.5 block text-[11px] font-bold uppercase tracking-wider text-zinc-400">
-                Max Simultaneous Streams
+                {t.maxSimultaneousStreams}
               </label>
               <select
                 value={newMaxStreams}
                 onChange={(e) => setNewMaxStreams(Number(e.target.value))}
                 className="w-full rounded-xl border border-white/10 bg-obsidian/80 px-3.5 py-2.5 text-sm text-white outline-none focus:border-violet-500"
               >
-                <option value={1}>1 stream at a time (best for kids/mobile)</option>
-                <option value={2}>2 streams at a time (recommended)</option>
-                <option value={3}>3 streams at a time</option>
-                <option value={0}>Unlimited</option>
+                <option value={1}>
+                  {lang === 'ro' ? '1 redare simultană (copii/mobil)' : '1 stream at a time (best for kids/mobile)'}
+                </option>
+                <option value={2}>
+                  {lang === 'ro' ? '2 redări simultane (recomandat)' : '2 streams at a time (recommended)'}
+                </option>
+                <option value={3}>
+                  {lang === 'ro' ? '3 redări simultane' : '3 streams at a time'}
+                </option>
+                <option value={0}>{lang === 'ro' ? 'Nelimitat' : 'Unlimited'}</option>
               </select>
             </div>
           </div>
@@ -370,7 +393,7 @@ export const FamilyAdminView: React.FC<FamilyAdminViewProps> = ({ session }) => 
                 onChange={(e) => setNewAllowTranscode(e.target.checked)}
                 className="h-4 w-4 rounded accent-violet-500"
               />
-              <span>Allow video transcoding (needed for mobile 720p/480p)</span>
+              <span>{t.allowTranscodingLabel}</span>
             </label>
 
             <label className="flex cursor-pointer items-center gap-2">
@@ -380,7 +403,7 @@ export const FamilyAdminView: React.FC<FamilyAdminViewProps> = ({ session }) => 
                 onChange={(e) => setNewShowOnSharedLogin(e.target.checked)}
                 className="h-4 w-4 rounded accent-violet-500"
               />
-              <span>Show avatar on &ldquo;Who&apos;s Watching?&rdquo; picker</span>
+              <span>{t.showOnWhosWatchingLabel}</span>
             </label>
           </div>
 
@@ -390,7 +413,7 @@ export const FamilyAdminView: React.FC<FamilyAdminViewProps> = ({ session }) => 
               onClick={() => setShowCreateForm(false)}
               className="rounded-xl border border-white/15 bg-white/5 px-4 py-2 text-xs font-semibold text-zinc-300 hover:bg-white/10"
             >
-              Cancel
+              {t.cancel}
             </button>
             <button
               type="submit"
@@ -398,7 +421,7 @@ export const FamilyAdminView: React.FC<FamilyAdminViewProps> = ({ session }) => 
               className="flex items-center gap-1.5 rounded-xl bg-violet-600 px-5 py-2 text-xs font-bold text-white hover:bg-violet-500 disabled:opacity-50"
             >
               <UserPlus className="h-3.5 w-3.5" />
-              {creating ? 'Creating...' : 'Create Account'}
+              {creating ? t.creating : t.createAccount}
             </button>
           </div>
         </form>
@@ -408,11 +431,11 @@ export const FamilyAdminView: React.FC<FamilyAdminViewProps> = ({ session }) => 
       <section className="mb-8">
         <h2 className="mb-3 flex items-center gap-2 text-xs font-bold uppercase tracking-wider text-zinc-400">
           <Activity className="h-4 w-4 text-emerald-400" />
-          Watching Now ({streams.length})
+          {t.watchingNow} ({streams.length})
         </h2>
         {streams.length === 0 ? (
           <div className="rounded-2xl border border-white/10 bg-surface/60 px-5 py-4 text-xs text-zinc-400">
-            No active streams right now — server CPU is idle.
+            {t.noActiveStreams}
           </div>
         ) : (
           <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3">
@@ -431,7 +454,7 @@ export const FamilyAdminView: React.FC<FamilyAdminViewProps> = ({ session }) => 
                           : 'bg-emerald-500/20 text-emerald-300'
                       }`}
                     >
-                      {s.playMethod === 'Transcode' ? 'Transcode' : 'Direct Play'}
+                      {s.playMethod === 'Transcode' ? t.transcoded : t.directPlay}
                     </span>
                   </div>
                   <p className="mt-1 truncate text-xs text-zinc-200">{s.nowPlayingTitle}</p>
@@ -451,11 +474,11 @@ export const FamilyAdminView: React.FC<FamilyAdminViewProps> = ({ session }) => 
       {/* Family Members Grid */}
       <section>
         <h2 className="mb-3 text-xs font-bold uppercase tracking-wider text-zinc-400">
-          Accounts ({users.length})
+          {t.accounts} ({users.length})
         </h2>
 
         {loading && users.length === 0 ? (
-          <div className="py-12 text-center text-sm text-zinc-400">Loading family accounts...</div>
+          <div className="py-12 text-center text-sm text-zinc-400">{t.loadingFamilyAccounts}</div>
         ) : (
           <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
             {users.map((user) => {
@@ -492,23 +515,26 @@ export const FamilyAdminView: React.FC<FamilyAdminViewProps> = ({ session }) => 
                           {user.parentalTier === 'kids' && (
                             <span className="inline-flex items-center gap-1 rounded-full bg-sky-500/20 px-2 py-0.5 text-[10px] font-bold text-sky-300">
                               <Baby className="h-3 w-3" />
-                              Kids
+                              {t.tierKids}
                             </span>
                           )}
                           {user.parentalTier === 'teen' && (
                             <span className="rounded-full bg-violet-500/20 px-2 py-0.5 text-[10px] font-bold text-violet-300">
-                              Teen (PG-13)
+                              {t.tierTeen} (PG-13)
                             </span>
                           )}
                           {user.isDisabled && (
                             <span className="rounded-full bg-red-500/20 px-2 py-0.5 text-[10px] font-bold text-red-300">
-                              Paused
+                              {t.pausedBadge}
                             </span>
                           )}
                         </div>
                         <p className="mt-0.5 text-[11px] text-zinc-400">
-                          {formatLastSeen(user.lastActivityDate)}
-                          {user.maxActiveSessions > 0 && ` · Max ${user.maxActiveSessions} streams`}
+                          {formatLastSeen(user.lastActivityDate, lang)}
+                          {user.maxActiveSessions > 0 &&
+                            (lang === 'ro'
+                              ? ` · Max ${user.maxActiveSessions} redări`
+                              : ` · Max ${user.maxActiveSessions} streams`)}
                         </p>
                       </div>
                     </div>
@@ -518,7 +544,7 @@ export const FamilyAdminView: React.FC<FamilyAdminViewProps> = ({ session }) => 
                         <button
                           disabled={isBusy}
                           onClick={async () => {
-                            const inviteText = `Qualiadept Stream\nWeb: https://stream.qualiadept.eu\nAndroid APK: https://github.com/gdatcu/qualiadept-stream/releases/latest\nUsername: ${user.name}`;
+                            const inviteText = `Qualiadept Stream\nWeb: https://stream.qualiadept.eu\nAndroid APK: https://github.com/gdatcu/qualiadept-stream/releases/latest\n${t.username}: ${user.name}`;
                             try {
                               if (navigator.share) {
                                 await navigator.share({
@@ -532,9 +558,13 @@ export const FamilyAdminView: React.FC<FamilyAdminViewProps> = ({ session }) => 
                             }
                             try {
                               await navigator.clipboard.writeText(inviteText);
-                              flashNotice(`Copied invite details for "${user.name}".`);
+                              flashNotice(
+                                lang === 'ro'
+                                  ? `Invitația pentru „${user.name}” a fost copiată.`
+                                  : `Copied invite details for "${user.name}".`
+                              );
                             } catch {
-                              flashNotice(`Username: ${user.name} · https://stream.qualiadept.eu`);
+                              flashNotice(`${t.username}: ${user.name} · https://stream.qualiadept.eu`);
                             }
                           }}
                           title="Share or copy invite"
@@ -560,7 +590,7 @@ export const FamilyAdminView: React.FC<FamilyAdminViewProps> = ({ session }) => 
                             setConfirmDeleteId(confirmDeleteId === user.id ? null : user.id);
                             setResetUserId(null);
                           }}
-                          title="Delete account"
+                          title={t.deleteBtn}
                           className="rounded-lg p-1.5 text-zinc-400 transition hover:bg-red-500/20 hover:text-red-300"
                         >
                           <Trash2 className="h-4 w-4" />
@@ -579,14 +609,16 @@ export const FamilyAdminView: React.FC<FamilyAdminViewProps> = ({ session }) => 
                           handleUpdatePolicy(
                             user,
                             { parentalTier: e.target.value as ParentalTier },
-                            `Updated content rating for "${user.name}".`
+                            lang === 'ro'
+                              ? `Nivelul de acces pentru „${user.name}” a fost actualizat.`
+                              : `Updated content rating for "${user.name}".`
                           )
                         }
                         className="rounded-lg border border-white/10 bg-obsidian/80 px-2.5 py-1 text-[11px] font-semibold text-zinc-200 outline-none focus:border-violet-500"
                       >
-                        <option value="adult">Adult (All)</option>
-                        <option value="teen">Teen (PG-13)</option>
-                        <option value="kids">Kids (PG &amp; G)</option>
+                        <option value="adult">{t.tierAdult}</option>
+                        <option value="teen">{t.tierTeen} (PG-13)</option>
+                        <option value="kids">{t.tierKids} (PG &amp; G)</option>
                       </select>
 
                       <button
@@ -595,7 +627,9 @@ export const FamilyAdminView: React.FC<FamilyAdminViewProps> = ({ session }) => 
                           handleUpdatePolicy(
                             user,
                             { allowTranscoding: !user.allowTranscoding },
-                            `${user.allowTranscoding ? 'Disabled' : 'Enabled'} transcoding for "${user.name}".`
+                            lang === 'ro'
+                              ? `Transcodarea a fost ${user.allowTranscoding ? 'oprită' : 'activată'} pentru „${user.name}”.`
+                              : `${user.allowTranscoding ? 'Disabled' : 'Enabled'} transcoding for "${user.name}".`
                           )
                         }
                         className={`rounded-lg border px-2.5 py-1 text-[11px] font-semibold transition ${
@@ -604,7 +638,13 @@ export const FamilyAdminView: React.FC<FamilyAdminViewProps> = ({ session }) => 
                             : 'border-white/10 bg-white/5 text-zinc-400'
                         }`}
                       >
-                        {user.allowTranscoding ? 'Transcode: On' : 'Direct Play Only'}
+                        {user.allowTranscoding
+                          ? lang === 'ro'
+                            ? 'Transcodare: Activă'
+                            : 'Transcode: On'
+                          : lang === 'ro'
+                          ? 'Doar Direct Play'
+                          : 'Direct Play Only'}
                       </button>
 
                       <button
@@ -613,13 +653,21 @@ export const FamilyAdminView: React.FC<FamilyAdminViewProps> = ({ session }) => 
                           handleUpdatePolicy(
                             user,
                             { showOnSharedLogin: user.isHidden },
-                            `${user.isHidden ? 'Shown' : 'Hidden'} "${user.name}" on Who's Watching picker.`
+                            lang === 'ro'
+                              ? `Profilul „${user.name}” este acum ${user.isHidden ? 'vizibil' : 'ascuns'}.`
+                              : `${user.isHidden ? 'Shown' : 'Hidden'} "${user.name}" on Who's Watching picker.`
                           )
                         }
                         className="flex items-center gap-1 rounded-lg border border-white/10 bg-white/5 px-2.5 py-1 text-[11px] font-semibold text-zinc-300 hover:bg-white/10"
                       >
                         {user.isHidden ? <EyeOff className="h-3 w-3" /> : <Eye className="h-3 w-3" />}
-                        {user.isHidden ? 'Hidden' : 'On Picker'}
+                        {user.isHidden
+                          ? lang === 'ro'
+                            ? 'Ascuns'
+                            : 'Hidden'
+                          : lang === 'ro'
+                          ? 'Vizibil la login'
+                          : 'On Picker'}
                       </button>
 
                       <button
@@ -628,7 +676,9 @@ export const FamilyAdminView: React.FC<FamilyAdminViewProps> = ({ session }) => 
                           handleUpdatePolicy(
                             user,
                             { isDisabled: !user.isDisabled },
-                            `${user.isDisabled ? 'Re-enabled' : 'Paused'} "${user.name}".`
+                            lang === 'ro'
+                              ? `Contul „${user.name}” a fost ${user.isDisabled ? 'reactivat' : 'suspendat'}.`
+                              : `${user.isDisabled ? 'Re-enabled' : 'Paused'} "${user.name}".`
                           )
                         }
                         className={`ml-auto rounded-lg border px-2.5 py-1 text-[11px] font-semibold transition ${
@@ -637,7 +687,7 @@ export const FamilyAdminView: React.FC<FamilyAdminViewProps> = ({ session }) => 
                             : 'border-white/10 bg-white/5 text-zinc-400 hover:text-amber-300'
                         }`}
                       >
-                        {user.isDisabled ? 'Unpause' : 'Pause'}
+                        {user.isDisabled ? t.unpauseBtn : t.pauseBtn}
                       </button>
                     </div>
                   )}
@@ -649,7 +699,7 @@ export const FamilyAdminView: React.FC<FamilyAdminViewProps> = ({ session }) => 
                         type="text"
                         value={resetPwValue}
                         onChange={(e) => setResetPwValue(e.target.value)}
-                        placeholder="New password (min 4 chars)"
+                        placeholder={t.passwordMinChars}
                         autoCapitalize="none"
                         autoCorrect="off"
                         className="min-w-0 flex-1 bg-transparent px-2 text-xs text-white placeholder-zinc-500 outline-none"
@@ -659,7 +709,7 @@ export const FamilyAdminView: React.FC<FamilyAdminViewProps> = ({ session }) => 
                         onClick={() => handleResetPassword(user)}
                         className="rounded-lg bg-violet-600 px-3 py-1.5 text-xs font-bold text-white hover:bg-violet-500 disabled:opacity-40"
                       >
-                        Save
+                        {t.saveBtn}
                       </button>
                     </div>
                   )}
@@ -667,20 +717,22 @@ export const FamilyAdminView: React.FC<FamilyAdminViewProps> = ({ session }) => 
                   {/* Inline Delete Confirmation */}
                   {confirmDeleteId === user.id && (
                     <div className="mt-3 flex items-center justify-between gap-2 rounded-xl border border-red-500/30 bg-red-500/10 p-2.5 text-xs">
-                      <span className="text-red-200">Delete &ldquo;{user.name}&rdquo;?</span>
+                      <span className="text-red-200">
+                        {t.deleteBtn} &ldquo;{user.name}&rdquo;?
+                      </span>
                       <div className="flex gap-1.5">
                         <button
                           onClick={() => setConfirmDeleteId(null)}
                           className="rounded-lg bg-white/10 px-2.5 py-1 text-zinc-200"
                         >
-                          Cancel
+                          {t.cancel}
                         </button>
                         <button
                           disabled={isBusy}
                           onClick={() => handleDelete(user)}
                           className="rounded-lg bg-red-600 px-3 py-1 font-bold text-white hover:bg-red-500"
                         >
-                          Delete
+                          {t.deleteBtn}
                         </button>
                       </div>
                     </div>
