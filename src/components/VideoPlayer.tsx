@@ -32,6 +32,7 @@ import {
   fetchNextEpisode,
   getCastPlaybackInfo,
   getPlaybackInfo,
+  autoEnsureRomanianSubtitle,
   prefetchPlaybackInfo,
   reportPlaybackProgress,
 } from '../services/jellyfin';
@@ -74,7 +75,11 @@ import {
 import {
   fetchSubtitleCues,
   getActiveSubtitleLines,
+  hasRomanianSubtitle,
+  isRomanianTrack,
   loadSubtitlePreferences,
+  normalizeSubtitleLang,
+  pickPreferredSubtitleTrack,
   saveSubtitlePreferences,
   type SubtitleCue,
   type SubtitlePreferences,
@@ -231,6 +236,10 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
   const [burnInSubIndex, setBurnInSubIndex] = useState<number | null>(null);
   const [subtitleCues, setSubtitleCues] = useState<SubtitleCue[]>([]);
   const [loadingSubtitles, setLoadingSubtitles] = useState(false);
+  const [roSubSearchStatus, setRoSubSearchStatus] = useState<
+    'idle' | 'searching' | 'not_found' | 'no_permission'
+  >('idle');
+  const autoCheckedRoSubItemRef = useRef<string | null>(null);
   const [showSubMenu, setShowSubMenu] = useState(false);
   const [showQualityMenu, setShowQualityMenu] = useState(false);
   const [showChaptersMenu, setShowChaptersMenu] = useState(false);
@@ -533,7 +542,7 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
     };
   }, [session, item, startOptions]);
 
-  // Apply pre-selected subtitle from DetailModal OR remembered preferred language once tracks arrive
+  // Apply pre-selected subtitle from DetailModal OR smart preferred/Romanian subtitle once tracks arrive
   useEffect(() => {
     if (!playback) return;
     if (appliedStartSubItemIdRef.current === item.id) return;
@@ -544,13 +553,18 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
     let match: SubtitleTrack | undefined;
     if (typeof desired === 'number') {
       match = playback.subtitles.find((s) => s.index === desired);
-    } else if (subtitlePrefs.preferredLanguage) {
-      const pref = subtitlePrefs.preferredLanguage.toLowerCase();
-      // Prefer text subtitle matching saved language so playback doesn't need HLS burn-in restart
+    } else {
+      const activeAudio =
+        playback.audioTracks.find(
+          (a) => a.index === (selectedAudioIndex ?? playback.defaultAudioIndex)
+        ) || playback.audioTracks[0];
       match =
-        playback.subtitles.find(
-          (s) => s.isText && s.language.toLowerCase() === pref && !s.isForced
-        ) || playback.subtitles.find((s) => s.isText && s.language.toLowerCase() === pref);
+        pickPreferredSubtitleTrack(playback.subtitles, {
+          preferredLanguage: subtitlePrefs.preferredLanguage,
+          appLang: lang,
+          activeAudioLanguage: activeAudio?.language,
+          activeAudioLabel: activeAudio?.label,
+        }) || undefined;
     }
 
     if (!match) return;
@@ -560,7 +574,74 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
       resumeOverrideRef.current = videoRef.current?.currentTime || item.resumePositionSeconds || 0;
       setBurnInSubIndex(match.index);
     }
-  }, [playback, item.id, item.resumePositionSeconds, startOptions, subtitlePrefs.preferredLanguage]);
+  }, [
+    playback,
+    item.id,
+    item.resumePositionSeconds,
+    startOptions,
+    subtitlePrefs.preferredLanguage,
+    lang,
+    selectedAudioIndex,
+  ]);
+
+  // Automatically check & download missing Romanian subtitles (including series episodes) without interrupting playback
+  useEffect(() => {
+    if (!playback || session.isDemo || offlineQualityLabel) return;
+    if (autoCheckedRoSubItemRef.current === item.id) return;
+    if (startOptions?.subtitleIndex === null || subtitlePrefs.preferredLanguage === 'off') return;
+    const wantsRo = lang === 'ro' || subtitlePrefs.preferredLanguage === 'ro';
+    if (!wantsRo) return;
+    if (hasRomanianSubtitle(playback.subtitles)) {
+      autoCheckedRoSubItemRef.current = item.id;
+      setRoSubSearchStatus('idle');
+      return;
+    }
+
+    const activeAudio =
+      playback.audioTracks.find(
+        (a) => a.index === (selectedAudioIndex ?? playback.defaultAudioIndex)
+      ) || playback.audioTracks[0];
+    if (activeAudio && isRomanianTrack(activeAudio) && subtitlePrefs.preferredLanguage !== 'ro') {
+      autoCheckedRoSubItemRef.current = item.id;
+      return;
+    }
+
+    autoCheckedRoSubItemRef.current = item.id;
+    let active = true;
+    setRoSubSearchStatus('searching');
+
+    autoEnsureRomanianSubtitle(session, item.id, {
+      mediaSourceId: playback.mediaSourceId,
+    }).then((res) => {
+      if (!active) return;
+      if ((res.status === 'downloaded' || res.status === 'already_present') && res.subtitles) {
+        setPlayback((prev) => (prev ? { ...prev, subtitles: res.subtitles! } : prev));
+        setRoSubSearchStatus('idle');
+        if (res.romanianTrack && res.romanianTrack.isText && res.romanianTrack.url) {
+          setActiveTextSubIndex((curr) => (curr === null ? res.romanianTrack!.index : curr));
+          flashAdaptiveNotice(t.roSubtitleDownloadedToast);
+        }
+      } else if (res.status === 'no_permission') {
+        setRoSubSearchStatus('no_permission');
+      } else {
+        setRoSubSearchStatus('not_found');
+      }
+    });
+
+    return () => {
+      active = false;
+    };
+  }, [
+    playback,
+    session,
+    item.id,
+    offlineQualityLabel,
+    startOptions?.subtitleIndex,
+    subtitlePrefs.preferredLanguage,
+    lang,
+    selectedAudioIndex,
+    t.roSubtitleDownloadedToast,
+  ]);
 
   // Keep HTML5 video playbackRate synced with selected Playback Speed
   useEffect(() => {
@@ -1806,7 +1887,7 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
   const handleSubtitleSelect = (sub: SubtitleTrack | null) => {
     const isCasting = castStateRef.current.isConnected;
     if (!sub) {
-      updateSubtitlePrefs({ preferredLanguage: null });
+      updateSubtitlePrefs({ preferredLanguage: 'off' });
       setActiveTextSubIndex(null);
       if (burnInSubIndex !== null) {
         setBurnInSubIndex(null);
@@ -1823,8 +1904,9 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
       return;
     }
 
-    if (sub.language && sub.language !== 'und') {
-      updateSubtitlePrefs({ preferredLanguage: sub.language.toLowerCase() });
+    const canonicalLang = normalizeSubtitleLang(sub.language, sub.label);
+    if (canonicalLang && canonicalLang !== 'und') {
+      updateSubtitlePrefs({ preferredLanguage: canonicalLang });
     }
 
     if (sub.isText && sub.url) {
@@ -1852,6 +1934,30 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
     }
     setShowSubMenu(false);
     bumpControls();
+  };
+
+  const handleManualSearchRoSubtitle = async () => {
+    if (!playback || session.isDemo || offlineQualityLabel || roSubSearchStatus === 'searching') {
+      return;
+    }
+    setRoSubSearchStatus('searching');
+    const res = await autoEnsureRomanianSubtitle(session, item.id, {
+      force: true,
+      mediaSourceId: playback.mediaSourceId,
+    });
+    if ((res.status === 'downloaded' || res.status === 'already_present') && res.subtitles) {
+      setPlayback((prev) => (prev ? { ...prev, subtitles: res.subtitles! } : prev));
+      setRoSubSearchStatus('idle');
+      if (res.romanianTrack) {
+        handleSubtitleSelect(res.romanianTrack);
+        flashAdaptiveNotice(t.roSubtitleDownloadedToast);
+      }
+    } else if (res.status === 'no_permission') {
+      setRoSubSearchStatus('no_permission');
+    } else {
+      setRoSubSearchStatus('not_found');
+      flashAdaptiveNotice(t.roSubtitleNotFound);
+    }
   };
 
   // Vertical brightness slider pointer handling (works on both touch and mouse)
@@ -1920,8 +2026,19 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
   const displayVolume = isCasting ? castState.volumeLevel : volume;
 
   const activeSubtitleIndex = burnInSubIndex ?? activeTextSubIndex;
-  const hasAudioOrSubs =
-    Boolean(playback && (playback.audioTracks.length > 0 || playback.subtitles.length > 0));
+  const canSearchRoSubtitles = Boolean(
+    playback &&
+      !session.isDemo &&
+      !offlineQualityLabel &&
+      roSubSearchStatus !== 'no_permission' &&
+      !hasRomanianSubtitle(playback.subtitles)
+  );
+  const showSubtitlesColumn = Boolean(
+    playback && (playback.subtitles.length > 0 || canSearchRoSubtitles || roSubSearchStatus === 'searching')
+  );
+  const hasAudioOrSubs = Boolean(
+    playback && (playback.audioTracks.length > 0 || showSubtitlesColumn)
+  );
   const activeQualityLabel =
     quality === 'auto'
       ? t.originalQuality
@@ -3616,7 +3733,7 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
                     className={`fixed inset-x-3 bottom-20 z-40 max-h-[68dvh] overflow-y-auto rounded-2xl border border-white/20 p-3 shadow-2xl sm:absolute sm:inset-x-auto sm:bottom-16 sm:right-0 sm:max-h-[70vh] sm:rounded-2xl sm:p-3 ${
                       isTv ? 'bg-[#0e111d]' : 'bg-surface/95 backdrop-blur-xl'
                     } ${
-                      playback.audioTracks.length > 0 && playback.subtitles.length > 0
+                      playback.audioTracks.length > 0 && showSubtitlesColumn
                         ? 'grid grid-cols-1 gap-3 sm:w-[36rem] sm:max-w-[calc(100vw-2rem)] sm:grid-cols-2'
                         : 'sm:w-80'
                     }`}
@@ -3663,7 +3780,7 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
                     )}
 
                     {/* Subtitles Column */}
-                    {playback.subtitles.length > 0 && (
+                    {showSubtitlesColumn && (
                       <div className="flex flex-col min-w-0">
                         <div className="px-2.5 py-1.5 text-[11px] font-bold uppercase tracking-wider text-zinc-400">
                           {t.subtitlesLabel}
@@ -3714,6 +3831,26 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
                               </button>
                             );
                           })}
+                          {canSearchRoSubtitles && (
+                            <button
+                              onClick={handleManualSearchRoSubtitle}
+                              disabled={roSubSearchStatus === 'searching'}
+                              className="mt-1 flex w-full items-center justify-center gap-1.5 rounded-lg border border-violet-400/35 bg-violet-500/15 px-2.5 py-2 text-xs font-semibold text-violet-200 transition hover:bg-violet-500/25 disabled:opacity-60"
+                            >
+                              {roSubSearchStatus === 'searching' ? (
+                                <>
+                                  <span className="h-3 w-3 animate-spin rounded-full border-2 border-violet-300 border-t-transparent" />
+                                  <span>{t.searchingRoSubtitles}</span>
+                                </>
+                              ) : (
+                                <span>
+                                  {roSubSearchStatus === 'not_found'
+                                    ? `${t.roSubtitleNotFound} · ↻`
+                                    : t.searchRoSubtitleBtn}
+                                </span>
+                              )}
+                            </button>
+                          )}
                         </div>
                       </div>
                     )}

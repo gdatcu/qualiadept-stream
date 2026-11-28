@@ -18,6 +18,7 @@ import {
   X,
 } from 'lucide-react';
 import {
+  autoEnsureRomanianSubtitle,
   fetchCollectionItems,
   fetchEpisodes,
   fetchItemDetails,
@@ -57,6 +58,12 @@ import type {
 } from '../types/media';
 import { getLocalizedTitleInfo, prefetchOfficialRoMeta } from '../services/tmdb';
 import { getRecommendedQuality } from '../utils/network';
+import {
+  hasRomanianSubtitle,
+  isRomanianTrack,
+  loadSubtitlePreferences,
+  pickPreferredSubtitleTrack,
+} from '../utils/subtitles';
 import { isTizenTv } from '../utils/tvNavigation';
 import {
   TranslatedOverview,
@@ -167,6 +174,10 @@ export const DetailModal: React.FC<DetailModalProps> = ({
   const [similarItems, setSimilarItems] = useState<MediaItem[]>([]);
   const [selectedAudioIndex, setSelectedAudioIndex] = useState<number | null>(null);
   const [selectedSubtitleIndex, setSelectedSubtitleIndex] = useState<number | null>(null);
+  const [roSubStatus, setRoSubStatus] = useState<
+    'idle' | 'searching' | 'downloaded' | 'not_found' | 'no_permission'
+  >('idle');
+  const userTouchedSubtitleRef = useRef(false);
   const [showAllTags, setShowAllTags] = useState(false);
   const [activeTrailerUrl, setActiveTrailerUrl] = useState<{ name: string; url: string } | null>(null);
   const [selectedPerson, setSelectedPerson] = useState<PersonCredit | null>(null);
@@ -201,6 +212,8 @@ export const DetailModal: React.FC<DetailModalProps> = ({
     setCollectionItems([]);
     setSelectedAudioIndex(null);
     setSelectedSubtitleIndex(null);
+    setRoSubStatus('idle');
+    userTouchedSubtitleRef.current = false;
     setShowAllTags(false);
     setActiveTrailerUrl(null);
     setSelectedPerson(null);
@@ -218,7 +231,16 @@ export const DetailModal: React.FC<DetailModalProps> = ({
       if (!active || !d) return;
       setDetails(d);
       setSelectedAudioIndex(d.defaultAudioIndex);
-      setSelectedSubtitleIndex(d.defaultSubtitleIndex);
+      const activeAudio =
+        d.audioTracks.find((a) => a.index === d.defaultAudioIndex) || d.audioTracks[0];
+      const subPrefs = loadSubtitlePreferences();
+      const autoSub = pickPreferredSubtitleTrack(d.subtitleTracks, {
+        preferredLanguage: subPrefs.preferredLanguage,
+        appLang: lang,
+        activeAudioLanguage: activeAudio?.language,
+        activeAudioLabel: activeAudio?.label,
+      });
+      setSelectedSubtitleIndex(autoSub ? autoSub.index : null);
     });
     if (item.type !== 'BoxSet') {
       fetchSimilarItems(session, item.id).then((list) => {
@@ -228,7 +250,71 @@ export const DetailModal: React.FC<DetailModalProps> = ({
     return () => {
       active = false;
     };
-  }, [session, item.id, item.type]);
+  }, [session, item.id, item.type, lang]);
+
+  // Automatically check & download missing Romanian subtitles via Jellyfin providers
+  useEffect(() => {
+    if (!details || session.isDemo) return;
+    if (item.type === 'Series' || item.type === 'BoxSet') return;
+    const subPrefs = loadSubtitlePreferences();
+    if (subPrefs.preferredLanguage === 'off') return;
+    const wantsRo = lang === 'ro' || subPrefs.preferredLanguage === 'ro';
+    if (!wantsRo) return;
+    if (hasRomanianSubtitle(details.subtitleTracks)) return;
+
+    const activeAudio =
+      details.audioTracks.find((a) => a.index === (selectedAudioIndex ?? details.defaultAudioIndex)) ||
+      details.audioTracks[0];
+    if (activeAudio && isRomanianTrack(activeAudio) && subPrefs.preferredLanguage !== 'ro') {
+      return;
+    }
+
+    let active = true;
+    setRoSubStatus('searching');
+    autoEnsureRomanianSubtitle(session, item.id).then((res) => {
+      if (!active) return;
+      if ((res.status === 'downloaded' || res.status === 'already_present') && res.subtitles) {
+        setDetails((prev) => (prev ? { ...prev, subtitleTracks: res.subtitles! } : prev));
+        if (!userTouchedSubtitleRef.current && res.romanianTrack) {
+          setSelectedSubtitleIndex(res.romanianTrack.index);
+        }
+        setRoSubStatus('downloaded');
+      } else if (res.status === 'no_permission') {
+        setRoSubStatus('no_permission');
+      } else {
+        setRoSubStatus('not_found');
+      }
+    });
+
+    return () => {
+      active = false;
+    };
+  }, [
+    session,
+    item.id,
+    item.type,
+    lang,
+    details?.subtitleTracks.length,
+    details?.defaultAudioIndex,
+    selectedAudioIndex,
+  ]);
+
+  const handleManualSearchRoSubtitle = async () => {
+    if (session.isDemo || roSubStatus === 'searching') return;
+    setRoSubStatus('searching');
+    const res = await autoEnsureRomanianSubtitle(session, item.id, { force: true });
+    if ((res.status === 'downloaded' || res.status === 'already_present') && res.subtitles) {
+      setDetails((prev) => (prev ? { ...prev, subtitleTracks: res.subtitles! } : prev));
+      if (res.romanianTrack) {
+        setSelectedSubtitleIndex(res.romanianTrack.index);
+      }
+      setRoSubStatus('downloaded');
+    } else if (res.status === 'no_permission') {
+      setRoSubStatus('no_permission');
+    } else {
+      setRoSubStatus('not_found');
+    }
+  };
 
   // Fetch Collection / BoxSet titles
   useEffect(() => {
@@ -327,7 +413,10 @@ export const DetailModal: React.FC<DetailModalProps> = ({
       startFromBeginning,
       startAtSeconds,
       audioIndex: isCustomAudio ? selectedAudioIndex : null,
-      subtitleIndex: selectedSubtitleIndex,
+      subtitleIndex:
+        userTouchedSubtitleRef.current || selectedSubtitleIndex !== null
+          ? selectedSubtitleIndex
+          : undefined,
     };
   };
 
@@ -901,61 +990,109 @@ export const DetailModal: React.FC<DetailModalProps> = ({
                 </div>
               )}
 
-              {details.subtitleTracks.length > 0 && (
+              {(details.subtitleTracks.length > 0 ||
+                roSubStatus === 'searching' ||
+                (lang === 'ro' && item.type !== 'Series' && item.type !== 'BoxSet' && !session.isDemo)) && (
                 <div className="grid grid-cols-[106px_1fr] items-center gap-3 text-xs sm:text-sm">
                   <span className="font-semibold text-zinc-400">{t.subtitlesLabel}</span>
-                  {isTv ? (
-                    <div data-tv-row="detail-subs" className="no-scrollbar flex items-center gap-2 overflow-x-auto py-1">
-                      <button
-                        type="button"
-                        data-tv-pill="true"
-                        onClick={() => setSelectedSubtitleIndex(null)}
-                        className={`flex-shrink-0 rounded-full border px-4 py-1.5 text-xs font-bold transition ${
-                          selectedSubtitleIndex === null
-                            ? 'border-white/35 bg-white/20 text-white'
-                            : 'border-white/15 bg-obsidian/80 text-zinc-300'
-                        }`}
-                      >
-                        {t.off}
-                      </button>
-                      {details.subtitleTracks.map((s) => {
-                        const active = selectedSubtitleIndex === s.index;
-                        return (
+                  <div className="flex flex-wrap items-center gap-2">
+                    {details.subtitleTracks.length > 0 &&
+                      (isTv ? (
+                        <div
+                          data-tv-row="detail-subs"
+                          className="no-scrollbar flex items-center gap-2 overflow-x-auto py-1"
+                        >
                           <button
-                            key={s.index}
                             type="button"
                             data-tv-pill="true"
-                            onClick={() => setSelectedSubtitleIndex(s.index)}
+                            onClick={() => {
+                              userTouchedSubtitleRef.current = true;
+                              setSelectedSubtitleIndex(null);
+                            }}
                             className={`flex-shrink-0 rounded-full border px-4 py-1.5 text-xs font-bold transition ${
-                              active
+                              selectedSubtitleIndex === null
                                 ? 'border-white/35 bg-white/20 text-white'
                                 : 'border-white/15 bg-obsidian/80 text-zinc-300'
                             }`}
                           >
-                            {localizeTrackLabel(s.label, s.language, lang)}
+                            {t.off}
                           </button>
-                        );
-                      })}
-                    </div>
-                  ) : (
-                    <select
-                      aria-label={t.subtitlesLabel}
-                      value={selectedSubtitleIndex === null ? 'off' : String(selectedSubtitleIndex)}
-                      onChange={(e) =>
-                        setSelectedSubtitleIndex(
-                          e.target.value === 'off' ? null : Number(e.target.value)
-                        )
-                      }
-                      className="w-full max-w-md rounded-xl border border-white/15 bg-surface px-3 py-1.5 text-xs sm:text-sm font-medium text-white outline-none transition focus:border-violet-400"
-                    >
-                      <option value="off">{t.off}</option>
-                      {details.subtitleTracks.map((s) => (
-                        <option key={s.index} value={String(s.index)}>
-                          {localizeTrackLabel(s.label, s.language, lang)}
-                        </option>
+                          {details.subtitleTracks.map((s) => {
+                            const active = selectedSubtitleIndex === s.index;
+                            return (
+                              <button
+                                key={s.index}
+                                type="button"
+                                data-tv-pill="true"
+                                onClick={() => {
+                                  userTouchedSubtitleRef.current = true;
+                                  setSelectedSubtitleIndex(s.index);
+                                }}
+                                className={`flex-shrink-0 rounded-full border px-4 py-1.5 text-xs font-bold transition ${
+                                  active
+                                    ? 'border-white/35 bg-white/20 text-white'
+                                    : 'border-white/15 bg-obsidian/80 text-zinc-300'
+                                }`}
+                              >
+                                {localizeTrackLabel(s.label, s.language, lang)}
+                              </button>
+                            );
+                          })}
+                        </div>
+                      ) : (
+                        <select
+                          aria-label={t.subtitlesLabel}
+                          value={
+                            selectedSubtitleIndex === null ? 'off' : String(selectedSubtitleIndex)
+                          }
+                          onChange={(e) => {
+                            userTouchedSubtitleRef.current = true;
+                            setSelectedSubtitleIndex(
+                              e.target.value === 'off' ? null : Number(e.target.value)
+                            );
+                          }}
+                          className="w-full max-w-md rounded-xl border border-white/15 bg-surface px-3 py-1.5 text-xs sm:text-sm font-medium text-white outline-none transition focus:border-violet-400"
+                        >
+                          <option value="off">{t.off}</option>
+                          {details.subtitleTracks.map((s) => (
+                            <option key={s.index} value={String(s.index)}>
+                              {localizeTrackLabel(s.label, s.language, lang)}
+                            </option>
+                          ))}
+                        </select>
                       ))}
-                    </select>
-                  )}
+
+                    {roSubStatus === 'searching' && (
+                      <span className="inline-flex items-center gap-1.5 rounded-lg border border-violet-400/30 bg-violet-500/15 px-2.5 py-1 text-[11px] font-semibold text-violet-200">
+                        <span className="h-3 w-3 animate-spin rounded-full border-2 border-violet-300 border-t-transparent" />
+                        {t.searchingRoSubtitles}
+                      </span>
+                    )}
+
+                    {roSubStatus !== 'searching' &&
+                      hasRomanianSubtitle(details.subtitleTracks) &&
+                      lang === 'ro' && (
+                        <span className="inline-flex items-center gap-1 rounded-lg border border-emerald-400/30 bg-emerald-500/15 px-2 py-0.5 text-[11px] font-bold text-emerald-300">
+                          <Check className="h-3 w-3" />
+                          {t.roSubtitleReadyBadge}
+                        </span>
+                      )}
+
+                    {roSubStatus !== 'searching' &&
+                      roSubStatus !== 'no_permission' &&
+                      !hasRomanianSubtitle(details.subtitleTracks) &&
+                      !session.isDemo &&
+                      item.type !== 'Series' &&
+                      item.type !== 'BoxSet' && (
+                        <button
+                          type="button"
+                          onClick={handleManualSearchRoSubtitle}
+                          className="inline-flex items-center gap-1.5 rounded-lg border border-white/15 bg-white/5 px-2.5 py-1 text-[11px] font-semibold text-zinc-200 transition hover:border-violet-400/50 hover:bg-violet-500/15 hover:text-white"
+                        >
+                          {roSubStatus === 'not_found' ? t.roSubtitleNotFound : t.searchRoSubtitleBtn}
+                        </button>
+                      )}
+                  </div>
                 </div>
               )}
             </div>

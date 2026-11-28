@@ -25,6 +25,7 @@ import {
   formatResolutionBadge,
   getDirectPlayVideoCodecs,
 } from '../utils/network';
+import { isRomanianTrack } from '../utils/subtitles';
 
 const SESSION_STORAGE_KEY = 'qualiadept_stream_session_v1';
 const SAVED_PROFILES_KEY = 'qualiadept_stream_profiles_v1';
@@ -2327,6 +2328,308 @@ export async function deleteFamilyUser(session: AuthSession, userId: string): Pr
   });
   if (!res.ok) throw new Error(`Failed to delete account (HTTP ${res.status})`);
   removeSavedProfile(userId);
+}
+
+// ---------------------------------------------------------------------------
+// Automatic Romanian Subtitle Check, Remote Search & Download (Jellyfin API)
+// ---------------------------------------------------------------------------
+
+export interface RemoteSubtitleCandidate {
+  id: string;
+  name: string;
+  providerName?: string;
+  format?: string;
+  language?: string;
+  isHashMatch?: boolean;
+  communityRating?: number;
+  downloadCount?: number;
+  hearingImpaired?: boolean;
+  aiTranslated?: boolean;
+  machineTranslated?: boolean;
+  forced?: boolean;
+}
+
+export type AutoRomanianSubtitleStatus =
+  | 'already_present'
+  | 'downloaded'
+  | 'not_found'
+  | 'no_permission'
+  | 'error';
+
+export interface AutoRomanianSubtitleResult {
+  status: AutoRomanianSubtitleStatus;
+  subtitles?: SubtitleTrack[];
+  romanianTrack?: SubtitleTrack;
+  providerName?: string;
+}
+
+const autoSubInFlight = new Map<string, Promise<AutoRomanianSubtitleResult>>();
+const autoSubAttempted = new Map<string, AutoRomanianSubtitleStatus>();
+
+export function invalidateItemSubtitleCaches(session: AuthSession, itemId: string): void {
+  itemDetailsCache.delete(`${session.userId}:${itemId}`);
+  const prefix = `${itemId}:`;
+  for (const key of playbackPrefetchCache.keys()) {
+    if (key.startsWith(prefix)) {
+      playbackPrefetchCache.delete(key);
+    }
+  }
+}
+
+function rankRemoteSubtitleCandidate(c: RemoteSubtitleCandidate): number {
+  let score = 0;
+  if (c.isHashMatch) score += 100;
+  const fmt = (c.format || '').toLowerCase();
+  if (fmt === 'srt' || fmt === 'vtt' || fmt === 'ass' || fmt === 'ssa' || fmt === 'subrip') {
+    score += 30;
+  }
+  if (c.forced) score -= 45;
+  if (c.aiTranslated || c.machineTranslated) score -= 25;
+  if (c.hearingImpaired) score -= 8;
+  if (c.downloadCount && c.downloadCount > 0) {
+    score += Math.min(22, Math.log10(c.downloadCount + 1) * 6);
+  }
+  if (c.communityRating && c.communityRating > 0) {
+    score += Math.min(10, c.communityRating);
+  }
+  return score;
+}
+
+/**
+ * Queries Jellyfin's installed subtitle providers (e.g. OpenSubtitles, Podnapisi)
+ * for Romanian subtitles (`rum`, with `ron` fallback).
+ */
+export async function searchRemoteRomanianSubtitles(
+  session: AuthSession,
+  itemId: string
+): Promise<{ candidates: RemoteSubtitleCandidate[]; permissionDenied?: boolean }> {
+  if (session.isDemo) return { candidates: [] };
+
+  const headers = { Authorization: buildAuthHeader(session.accessToken) };
+  for (const langCode of ['rum', 'ron']) {
+    try {
+      const res = await fetchWithRetry(
+        `${session.serverUrl}/Items/${encodeURIComponent(itemId)}/RemoteSearch/Subtitles/${langCode}`,
+        { headers },
+        { timeoutMs: 14_000, retries: 0 }
+      );
+      if (res.status === 401 || res.status === 403) {
+        return { candidates: [], permissionDenied: true };
+      }
+      if (!res.ok) continue;
+      const rawList = (await res.json()) as Array<{
+        Id?: string;
+        Name?: string;
+        ProviderName?: string;
+        Format?: string;
+        ThreeLetterISOLanguageName?: string;
+        IsHashMatch?: boolean;
+        CommunityRating?: number;
+        DownloadCount?: number;
+        HearingImpaired?: boolean;
+        AiTranslated?: boolean;
+        MachineTranslated?: boolean;
+        Forced?: boolean;
+      }>;
+      if (!Array.isArray(rawList) || rawList.length === 0) continue;
+
+      const candidates: RemoteSubtitleCandidate[] = rawList
+        .filter((r) => Boolean(r.Id))
+        .map((r) => ({
+          id: r.Id!,
+          name: r.Name || 'Romanian',
+          providerName: r.ProviderName,
+          format: r.Format,
+          language: r.ThreeLetterISOLanguageName || langCode,
+          isHashMatch: Boolean(r.IsHashMatch),
+          communityRating: r.CommunityRating,
+          downloadCount: r.DownloadCount,
+          hearingImpaired: Boolean(r.HearingImpaired),
+          aiTranslated: Boolean(r.AiTranslated),
+          machineTranslated: Boolean(r.MachineTranslated),
+          forced: Boolean(r.Forced),
+        }))
+        .sort((a, b) => rankRemoteSubtitleCandidate(b) - rankRemoteSubtitleCandidate(a));
+
+      if (candidates.length > 0) {
+        return { candidates };
+      }
+    } catch {
+      // Try next code or fail silently
+    }
+  }
+  return { candidates: [] };
+}
+
+/**
+ * Fetches fresh subtitle tracks (with ready-to-fetch WebVTT URLs) from Jellyfin
+ * bypassing local caches — used right after downloading a remote subtitle.
+ */
+export async function fetchFreshSubtitleTracks(
+  session: AuthSession,
+  itemId: string,
+  preferredMediaSourceId?: string
+): Promise<SubtitleTrack[]> {
+  if (session.isDemo) return [];
+  const res = await fetchWithRetry(
+    `${session.serverUrl}/Users/${session.userId}/Items/${encodeURIComponent(itemId)}`,
+    {
+      headers: { Authorization: buildAuthHeader(session.accessToken) },
+    },
+    { timeoutMs: 10_000, retries: 1 }
+  );
+  if (!res.ok) return [];
+  const raw = (await res.json()) as {
+    MediaSources?: Array<{ Id?: string; MediaStreams?: RawMediaStream[] }>;
+  };
+  const source =
+    (preferredMediaSourceId
+      ? raw.MediaSources?.find((ms) => ms.Id === preferredMediaSourceId)
+      : undefined) || raw.MediaSources?.[0];
+  const mediaSourceId = source?.Id || preferredMediaSourceId || itemId;
+  const streams = source?.MediaStreams || [];
+  const token = encodeURIComponent(session.accessToken);
+
+  return streams
+    .filter((s) => s.Type === 'Subtitle')
+    .map((s) => {
+      const isText = Boolean(s.IsTextSubtitleStream);
+      const url = isText
+        ? `${session.serverUrl}/Videos/${itemId}/${mediaSourceId}/Subtitles/${s.Index}/0/Stream.vtt?api_key=${token}`
+        : undefined;
+      return {
+        index: s.Index,
+        label: formatSubtitleLabel(s),
+        language: s.Language || 'und',
+        isText,
+        codec: s.Codec,
+        isDefault: Boolean(s.IsDefault),
+        isForced: Boolean(s.IsForced),
+        url,
+      };
+    });
+}
+
+/**
+ * Automatically verifies whether an item has Romanian subtitles; if missing,
+ * queries Jellyfin's remote subtitle providers (OpenSubtitles, etc.), downloads
+ * the highest-ranked Romanian match into Jellyfin (persisted for all family
+ * devices), invalidates caches, and returns the updated subtitle track list.
+ */
+export async function autoEnsureRomanianSubtitle(
+  session: AuthSession,
+  itemId: string,
+  options: { force?: boolean; mediaSourceId?: string } = {}
+): Promise<AutoRomanianSubtitleResult> {
+  if (session.isDemo) {
+    return { status: 'not_found' };
+  }
+
+  const dedupeKey = `${session.userId}:${itemId}`;
+  const existing = autoSubInFlight.get(dedupeKey);
+  if (existing) return existing;
+
+  if (!options.force) {
+    const prev = autoSubAttempted.get(dedupeKey);
+    if (prev === 'not_found' || prev === 'no_permission') {
+      return { status: prev };
+    }
+  }
+
+  const task = (async (): Promise<AutoRomanianSubtitleResult> => {
+    try {
+      // 1. Re-check current item subtitles first (in case another device already downloaded RO)
+      const currentTracks = await fetchFreshSubtitleTracks(
+        session,
+        itemId,
+        options.mediaSourceId
+      );
+      const existingRo = currentTracks.find((s) => isRomanianTrack(s) && s.isText) ||
+        currentTracks.find((s) => isRomanianTrack(s));
+      if (existingRo) {
+        autoSubAttempted.set(dedupeKey, 'already_present');
+        return {
+          status: 'already_present',
+          subtitles: currentTracks,
+          romanianTrack: existingRo,
+        };
+      }
+
+      // 2. Search Jellyfin remote subtitle providers for Romanian
+      const { candidates, permissionDenied } = await searchRemoteRomanianSubtitles(session, itemId);
+      if (permissionDenied) {
+        autoSubAttempted.set(dedupeKey, 'no_permission');
+        return { status: 'no_permission' };
+      }
+      if (candidates.length === 0) {
+        autoSubAttempted.set(dedupeKey, 'not_found');
+        return { status: 'not_found' };
+      }
+
+      // 3. Try downloading top candidates (up to 2 in case the first provider file fails)
+      const headers = { Authorization: buildAuthHeader(session.accessToken) };
+      let downloadedProvider: string | undefined;
+      let downloadOk = false;
+
+      for (const candidate of candidates.slice(0, 2)) {
+        const dlRes = await fetchWithRetry(
+          `${session.serverUrl}/Items/${encodeURIComponent(itemId)}/RemoteSearch/Subtitles/${encodeURIComponent(candidate.id)}`,
+          { method: 'POST', headers },
+          { timeoutMs: 15_000, retries: 0 }
+        );
+        if (dlRes.status === 401 || dlRes.status === 403) {
+          autoSubAttempted.set(dedupeKey, 'no_permission');
+          return { status: 'no_permission' };
+        }
+        if (dlRes.ok) {
+          downloadOk = true;
+          downloadedProvider = candidate.providerName;
+          break;
+        }
+      }
+
+      if (!downloadOk) {
+        autoSubAttempted.set(dedupeKey, 'error');
+        return { status: 'error' };
+      }
+
+      // 4. Invalidate local caches and wait briefly for Jellyfin to attach the new .srt stream
+      invalidateItemSubtitleCaches(session, itemId);
+
+      for (const waitMs of [700, 1400]) {
+        await new Promise((r) => window.setTimeout(r, waitMs));
+        const updatedTracks = await fetchFreshSubtitleTracks(
+          session,
+          itemId,
+          options.mediaSourceId
+        );
+        const newRo =
+          updatedTracks.find((s) => isRomanianTrack(s) && s.isText && !s.isForced) ||
+          updatedTracks.find((s) => isRomanianTrack(s) && s.isText) ||
+          updatedTracks.find((s) => isRomanianTrack(s));
+        if (newRo) {
+          invalidateItemSubtitleCaches(session, itemId);
+          autoSubAttempted.set(dedupeKey, 'downloaded');
+          return {
+            status: 'downloaded',
+            subtitles: updatedTracks,
+            romanianTrack: newRo,
+            providerName: downloadedProvider,
+          };
+        }
+      }
+
+      autoSubAttempted.set(dedupeKey, 'not_found');
+      return { status: 'not_found' };
+    } catch {
+      return { status: 'error' };
+    } finally {
+      autoSubInFlight.delete(dedupeKey);
+    }
+  })();
+
+  autoSubInFlight.set(dedupeKey, task);
+  return task;
 }
 
 

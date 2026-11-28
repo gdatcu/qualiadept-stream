@@ -2,6 +2,9 @@
 // Renders crisp custom overlays across Mobile Chrome, Android APK, Desktop, and Samsung Tizen TV
 // without relying on fragile browser <track> / video.textTracks index alignment with hls.js.
 
+import type { AppLanguage } from '../i18n';
+import type { SubtitleTrack } from '../types/media';
+
 export interface SubtitleCue {
   start: number;
   end: number;
@@ -220,6 +223,150 @@ export function saveSubtitlePreferences(prefs: SubtitlePreferences): void {
   } catch {
     // Ignore storage errors
   }
+}
+
+const CANONICAL_LANG_MAP: Record<string, string> = {
+  ro: 'ro',
+  ron: 'ro',
+  rum: 'ro',
+  'ro-ro': 'ro',
+  romanian: 'ro',
+  'română': 'ro',
+  romana: 'ro',
+  en: 'en',
+  eng: 'en',
+  'en-us': 'en',
+  'en-gb': 'en',
+  english: 'en',
+  'engleză': 'en',
+  engleza: 'en',
+  fr: 'fr',
+  fre: 'fr',
+  fra: 'fr',
+  french: 'fr',
+  'franceză': 'fr',
+  es: 'es',
+  spa: 'es',
+  spanish: 'es',
+  'spaniolă': 'es',
+  de: 'de',
+  ger: 'de',
+  deu: 'de',
+  german: 'de',
+  'germană': 'de',
+  it: 'it',
+  ita: 'it',
+  italian: 'it',
+  'italiană': 'it',
+  pt: 'pt',
+  por: 'pt',
+  hu: 'hu',
+  hun: 'hu',
+  pl: 'pl',
+  pol: 'pl',
+  ru: 'ru',
+  rus: 'ru',
+  tr: 'tr',
+  tur: 'tr',
+  ja: 'ja',
+  jpn: 'ja',
+  ko: 'ko',
+  kor: 'ko',
+};
+
+const ROMANIAN_LABEL_RE = /\b(romanian|rom[âa]n[ăa]|ro|ron|rum)\b/i;
+
+export function normalizeSubtitleLang(langCode?: string | null, label?: string | null): string {
+  const raw = (langCode || '').trim().toLowerCase();
+  if (raw && raw !== 'und' && raw !== 'unknown') {
+    if (CANONICAL_LANG_MAP[raw]) return CANONICAL_LANG_MAP[raw];
+    const base = raw.split(/[-_]/)[0];
+    if (CANONICAL_LANG_MAP[base]) return CANONICAL_LANG_MAP[base];
+    return base;
+  }
+  const cleanLabel = (label || '').trim();
+  if (cleanLabel && ROMANIAN_LABEL_RE.test(cleanLabel)) {
+    return 'ro';
+  }
+  return raw || 'und';
+}
+
+export function isRomanianTrack(track: { language?: string | null; label?: string | null }): boolean {
+  return normalizeSubtitleLang(track.language, track.label) === 'ro';
+}
+
+export function hasRomanianSubtitle(subtitles: SubtitleTrack[]): boolean {
+  return subtitles.some((s) => isRomanianTrack(s));
+}
+
+function isSdhOrHearingImpaired(label?: string): boolean {
+  if (!label) return false;
+  return /\b(sdh|cc|hi|hearing impaired)\b/i.test(label);
+}
+
+/**
+ * Picks the best subtitle track for the viewer:
+ * - Normalizes ro/ron/rum/Romanian interchangeably
+ * - Auto-selects Romanian when UI is in Romanian (unless explicitly set to 'off' or audio is already Romanian)
+ * - Prefers text subtitles (zero transcoding) and non-forced/non-SDH tracks
+ */
+export function pickPreferredSubtitleTrack(
+  subtitles: SubtitleTrack[],
+  options: {
+    preferredLanguage?: string | null;
+    appLang: AppLanguage;
+    activeAudioLanguage?: string | null;
+    activeAudioLabel?: string | null;
+  }
+): SubtitleTrack | null {
+  if (subtitles.length === 0) return null;
+
+  const prefRaw = (options.preferredLanguage || '').trim().toLowerCase();
+  if (prefRaw === 'off') return null;
+
+  const targetLang = prefRaw
+    ? normalizeSubtitleLang(prefRaw)
+    : options.appLang === 'ro'
+    ? 'ro'
+    : null;
+
+  const audioIsRomanian = isRomanianTrack({
+    language: options.activeAudioLanguage,
+    label: options.activeAudioLabel,
+  });
+
+  if (targetLang) {
+    // Don't auto-enable full Romanian subtitles over Romanian audio unless user explicitly saved 'ro'
+    if (targetLang === 'ro' && audioIsRomanian && !prefRaw) {
+      return null;
+    }
+
+    const matching = subtitles.filter(
+      (s) => normalizeSubtitleLang(s.language, s.label) === targetLang
+    );
+    if (matching.length > 0) {
+      // Rank: text > image, non-forced > forced, clean > SDH, default tie-breaker
+      const sorted = [...matching].sort((a, b) => {
+        const score = (s: SubtitleTrack) =>
+          (s.isText ? 100 : 0) +
+          (!s.isForced ? 40 : 0) +
+          (!isSdhOrHearingImpaired(s.label) ? 10 : 0) +
+          (s.isDefault ? 5 : 0);
+        return score(b) - score(a);
+      });
+      return sorted[0];
+    }
+  }
+
+  // Fallback to container default subtitle only if user hasn't picked a different preference
+  if (!prefRaw) {
+    const def = subtitles.find((s) => s.isDefault);
+    if (def && !(audioIsRomanian && isRomanianTrack(def) && !def.isForced)) {
+      return def;
+    }
+  }
+
+  return null;
 }
 
 export function getActiveSubtitleLines(
